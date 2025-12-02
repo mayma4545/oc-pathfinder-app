@@ -1,0 +1,111 @@
+# Quick Start Commands
+
+# ============================================
+# STEP 1: Start Django Backend
+# ============================================
+# Open PowerShell Terminal #1
+
+# Navigate to backend
+cd c:\Users\Admin\Desktop\recorder\record
+
+# Start Django server (keep this running)
+python manage.py runserver 0.0.0.0:8000
+
+# Create superuser (if first time)
+# python manage.py createsuperuser
+
+
+# ============================================
+# STEP 2: Start Mobile App
+# ============================================
+# Open PowerShell Terminal #2
+
+# Navigate to mobile app
+cd c:\Users\Admin\Desktop\recorder\OC-PATHFINDER
+
+# Install dependencies (first time only)
+npm install
+
+# Start Expo dev server
+npm start
+
+# Then press:
+# - 'a' for Android emulator
+# - 'i' for iOS simulator (Mac only)
+# - Scan QR code for physical device
+
+
+# ============================================
+# CONFIGURATION
+# ============================================
+
+# Edit config.js to set API URL:
+
+# For Android Emulator (default):
+# export const API_BASE_URL = 'http://10.0.2.2:8000';
+
+# For iOS Simulator:
+# export const API_BASE_URL = 'http://localhost:8000';
+
+# For Physical Device (find your IP with: ipconfig):
+# export const API_BASE_URL = 'http://YOUR_IP:8000';
+
+
+# ============================================
+# ADMIN LOGIN
+# ============================================
+
+# In the mobile app:
+# 1. On Point Selection screen
+# 2. Tap "Find Your Way" title 5 times rapidly
+# 3. Enter your Django superuser credentials
+# 4. Access admin features
+
+
+# ============================================
+# TROUBLESHOOTING
+# ============================================
+
+# If you get "Network Error":
+# 1. Check Django is running: http://localhost:8000/api/mobile/nodes/
+# 2. Verify API_BASE_URL in config.js
+# 3. For physical device, allow port 8000 in firewall:
+#    New-NetFirewallRule -DisplayName "Django Dev Server" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
+
+# If you get module errors:
+# npm install
+# npm start -- --clear
+
+# If images don't load:
+# Check Django MEDIA_URL and MEDIA_ROOT settings
+# Ensure record/urls.py includes media static URLs
+
+
+# ============================================
+# TESTING
+# ============================================
+
+# Test backend API:
+# http://localhost:8000/api/mobile/nodes/
+# http://localhost:8000/api/mobile/campus-map/
+# http://localhost:8000/admin/
+
+# Test mobile app:
+# 1. Welcome screen should appear
+# 2. Point selection should load nodes
+# 3. Admin login should work (5 taps)
+# 4. Path finding should display route
+
+
+# ============================================
+# USEFUL LINKS
+# ============================================
+
+# Django Admin: http://localhost:8000/admin/
+# API Nodes: http://localhost:8000/api/mobile/nodes/
+# API Campus Map: http://localhost:8000/api/mobile/campus-map/
+
+# Documentation:
+# - README.md - User guide
+# - INSTALLATION.md - Detailed setup
+# - FEATURES.md - Complete feature list
