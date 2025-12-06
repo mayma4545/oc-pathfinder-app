@@ -9,12 +9,18 @@ import {
   TextInput,
   Alert,
   ScrollView,
+  ActivityIndicator,
+  Switch,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import NetInfo from '@react-native-community/netinfo';
 import { THEME_COLORS, APP_CONFIG } from '../config';
 import ApiService from '../services/ApiService';
 import { useAuth } from '../contexts/AuthContext';
+import { useDownload } from '../contexts/DownloadContext';
+import SyncManager from '../services/SyncManager';
+import OfflineService from '../services/OfflineService';
 
 const PointSelectionScreen = ({ navigation }) => {
   const { isAdmin, login } = useAuth();
@@ -37,9 +43,22 @@ const PointSelectionScreen = ({ navigation }) => {
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [imageQuality, setImageQuality] = useState('sd'); // 'hd' or 'sd'
 
+  // Network status
+  const [isConnected, setIsConnected] = useState(true);
+  const [offlineDataAvailable, setOfflineDataAvailable] = useState(false);
+  const [forceOfflineMode, setForceOfflineMode] = useState(false); // Manual offline mode toggle
+
   useEffect(() => {
     loadNodes();
     loadImageQualitySetting();
+    checkOfflineData();
+    
+    // Subscribe to network status
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setIsConnected(state.isConnected && state.isInternetReachable);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -86,6 +105,16 @@ const PointSelectionScreen = ({ navigation }) => {
       }
     } catch (error) {
       console.error('Error loading image quality setting:', error);
+    }
+  };
+
+  const checkOfflineData = async () => {
+    try {
+      const available = await OfflineService.isPathfindingAvailable();
+      setOfflineDataAvailable(available);
+    } catch (error) {
+      console.error('Error checking offline data:', error);
+      setOfflineDataAvailable(false);
     }
   };
 
@@ -156,7 +185,7 @@ const PointSelectionScreen = ({ navigation }) => {
     setSearchQuery('');
   };
 
-  const handleFindPath = () => {
+  const handleFindPath = async () => {
     if (!startPoint || !endPoint) {
       Alert.alert('Error', 'Please select both starting point and destination');
       return;
@@ -167,10 +196,49 @@ const PointSelectionScreen = ({ navigation }) => {
       return;
     }
 
+    // Check if offline (either manually forced or no network) and warn user
+    if (!isConnected || forceOfflineMode) {
+      if (!offlineDataAvailable) {
+        Alert.alert(
+          'No Internet Connection',
+          'You are offline and no offline data is available. Please connect to the internet to download maps and paths first.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // Show offline mode warning
+      const offlineReason = forceOfflineMode ? 'forced offline mode for testing' : 'no network connection';
+      Alert.alert(
+        '📴 Offline Mode',
+        `You are using ${offlineReason}. The app will use cached data for navigation.\n\n⚠️ Note: Any updates made on the server will not be reflected until you go online and sync your data.`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Continue Offline',
+            onPress: () => {
+              navigation.navigate('MapDisplay', {
+                startNode: startPoint,
+                endNode: endPoint,
+                imageQuality: imageQuality,
+                isOffline: true,
+              });
+            }
+          }
+        ]
+      );
+      return;
+    }
+
+    // Online mode - proceed normally
     navigation.navigate('MapDisplay', {
       startNode: startPoint,
       endNode: endPoint,
-      imageQuality: imageQuality, // Pass image quality setting
+      imageQuality: imageQuality,
+      isOffline: false,
     });
   };
 
@@ -199,6 +267,11 @@ const PointSelectionScreen = ({ navigation }) => {
       <View style={styles.header}>
         <TouchableOpacity onPress={handleTitleTap} activeOpacity={1}>
           <Text style={styles.headerTitle}>Find Your Way</Text>
+          {!isConnected && (
+            <Text style={styles.offlineIndicator}>
+              📴 Offline Mode{offlineDataAvailable ? '' : ' - No Data'}
+            </Text>
+          )}
         </TouchableOpacity>
         <View style={styles.headerButtons}>
           <TouchableOpacity
@@ -219,6 +292,17 @@ const PointSelectionScreen = ({ navigation }) => {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {/* Offline Warning Banner */}
+        {!isConnected && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineBannerText}>
+              {offlineDataAvailable 
+                ? '⚠️ You are offline. Using cached data. Changes on the server won\'t be visible until you reconnect.'
+                : '❌ No offline data available. Please connect to the internet to download maps.'}
+            </Text>
+          </View>
+        )}
+
         {/* Starting Point Selector */}
         <View style={styles.section}>
           <Text style={styles.label}>Starting Point</Text>
@@ -416,50 +500,357 @@ const PointSelectionScreen = ({ navigation }) => {
         onRequestClose={() => setSettingsModalVisible(false)}
       >
         <View style={styles.modalContainer}>
-          <View style={styles.settingsModalContent}>
-            <View style={styles.settingsModalHeader}>
-              <Text style={styles.settingsModalTitle}>360° Image Quality</Text>
-              <TouchableOpacity
-                onPress={() => setSettingsModalVisible(false)}
-                style={styles.closeButton}
-              >
-                <Text style={styles.closeButtonText}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.settingsDescription}>
-              Toggle HD mode for higher quality 360° images. SD (default) loads faster.
-            </Text>
-
-            {/* HD Toggle */}
-            <TouchableOpacity
-              style={styles.qualityToggleRow}
-              onPress={() => saveImageQualitySetting(imageQuality === 'hd' ? 'sd' : 'hd')}
-              activeOpacity={0.7}
-              accessibilityLabel="Toggle HD Quality"
-              accessibilityRole="switch"
-            >
-              <View style={styles.qualityToggleInfo}>
-                <Text style={styles.qualityToggleLabel}>HD Quality</Text>
-                <Text style={styles.qualityToggleDescription}>
-                  {imageQuality === 'hd' ? 'Original quality images' : 'Optimized for faster loading'}
-                </Text>
-              </View>
-              <View style={[styles.radioButton, imageQuality === 'hd' && styles.radioButtonOn]}>
-                {imageQuality === 'hd' && <View style={styles.radioButtonInner} />}
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.settingsCloseButton}
-              onPress={() => setSettingsModalVisible(false)}
-            >
-              <Text style={styles.settingsCloseButtonText}>Done</Text>
-            </TouchableOpacity>
-          </View>
+          <SettingsModalContent 
+            imageQuality={imageQuality}
+            saveImageQualitySetting={saveImageQualitySetting}
+            onClose={() => setSettingsModalVisible(false)}
+            onOpenOfflineSettings={() => {
+              setSettingsModalVisible(false);
+              navigation.navigate('OfflineSettings');
+            }}
+            forceOfflineMode={forceOfflineMode}
+            setForceOfflineMode={setForceOfflineMode}
+            offlineDataAvailable={offlineDataAvailable}
+          />
         </View>
       </Modal>
     </SafeAreaView>
+  );
+};
+
+// Separate component for Settings Modal to use hooks
+const SettingsModalContent = ({ imageQuality, saveImageQualitySetting, onClose, onOpenOfflineSettings, forceOfflineMode, setForceOfflineMode, offlineDataAvailable }) => {
+  const { 
+    downloadProgress, 
+    offlineStats, 
+    isDownloading, 
+    startDownload, 
+    checkForUpdates,
+    clearCache, 
+    cancelDownload,
+    refreshStats 
+  } = useDownload();
+
+  // Sync settings state
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  const [wifiOnlySync, setWifiOnlySync] = useState(false);
+
+  useEffect(() => {
+    // Refresh stats and load sync settings when modal opens
+    if (refreshStats) {
+      refreshStats();
+    }
+    loadSyncSettings();
+  }, [refreshStats]);
+
+  const loadSyncSettings = async () => {
+    const autoSync = await SyncManager.isAutoSyncEnabled();
+    const wifiOnly = await SyncManager.isWifiOnlySync();
+    setAutoSyncEnabled(autoSync);
+    setWifiOnlySync(wifiOnly);
+  };
+
+  const handleAutoSyncToggle = async (value) => {
+    setAutoSyncEnabled(value);
+    await SyncManager.setAutoSyncEnabled(value);
+  };
+
+  const handleWifiOnlyToggle = async (value) => {
+    setWifiOnlySync(value);
+    await SyncManager.setWifiOnlySync(value);
+  };
+
+  const handleDownload = async () => {
+    Alert.alert(
+      'Download Resources',
+      'This will download all nodes, edges, and 360° images for offline use. This may take a while and use significant storage space. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Download', 
+          onPress: async () => {
+            const result = await startDownload();
+            if (result.success) {
+              Alert.alert(
+                'Download Complete',
+                `Downloaded ${result.nodesCount} nodes, ${result.edgesCount} edges, and ${result.imagesCount} images.`
+              );
+            } else if (result.error !== 'Download already in progress') {
+              Alert.alert('Download Failed', result.error || 'An error occurred');
+            }
+          }
+        },
+      ]
+    );
+  };
+
+  const handleCheckUpdates = async () => {
+    const result = await checkForUpdates();
+    if (result.success) {
+      if (result.hasUpdates) {
+        Alert.alert('Update Complete', `Added ${result.newNodes} new nodes and ${result.newImages} new images.`);
+      } else {
+        Alert.alert('Up to Date', 'All offline resources are up to date.');
+      }
+    } else {
+      Alert.alert('Update Failed', result.error || 'Failed to check for updates');
+    }
+  };
+
+  const handleClearCache = () => {
+    Alert.alert(
+      'Clear Cache',
+      'This will delete all downloaded offline resources. You will need to download them again for offline use. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Clear', 
+          style: 'destructive',
+          onPress: async () => {
+            const result = await clearCache();
+            if (result.success) {
+              Alert.alert('Cache Cleared', 'All offline resources have been deleted.');
+            } else {
+              Alert.alert('Error', result.error || 'Failed to clear cache');
+            }
+          }
+        },
+      ]
+    );
+  };
+
+  const formatLastSync = (date) => {
+    if (!date) return 'Never';
+    const d = new Date(date);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  return (
+    <View style={styles.settingsModalContent}>
+      <View style={styles.settingsModalHeader}>
+        <Text style={styles.settingsModalTitle}>⚙️ Settings</Text>
+        <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+          <Text style={styles.closeButtonText}>✕</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView style={styles.settingsScrollView} showsVerticalScrollIndicator={false}>
+        {/* Image Quality Section */}
+        <Text style={styles.settingsSectionTitle}>360° Image Quality</Text>
+        <Text style={styles.settingsDescription}>
+          Toggle HD mode for higher quality 360° images. SD (default) loads faster.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.qualityToggleRow}
+          onPress={() => saveImageQualitySetting(imageQuality === 'hd' ? 'sd' : 'hd')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.qualityToggleInfo}>
+            <Text style={styles.qualityToggleLabel}>HD Quality</Text>
+            <Text style={styles.qualityToggleDescription}>
+              {imageQuality === 'hd' ? 'Original quality images' : 'Optimized for faster loading'}
+            </Text>
+          </View>
+          <View style={[styles.radioButton, imageQuality === 'hd' && styles.radioButtonOn]}>
+            {imageQuality === 'hd' && <View style={styles.radioButtonInner} />}
+          </View>
+        </TouchableOpacity>
+
+        {/* Force Offline Mode Section */}
+        <Text style={[styles.settingsSectionTitle, { marginTop: 25 }]}>🧪 Test Offline Mode</Text>
+        <Text style={styles.settingsDescription}>
+          Force offline mode for testing pathfinding without disabling your network.
+        </Text>
+
+        <View style={styles.syncSettingRow}>
+          <View style={styles.syncSettingInfo}>
+            <Text style={styles.syncSettingLabel}>📴 Force Offline Mode</Text>
+            <Text style={styles.syncSettingDescription}>
+              {forceOfflineMode 
+                ? 'App will use offline pathfinding only' 
+                : offlineDataAvailable 
+                  ? 'Ready to test offline navigation'
+                  : 'Download offline data first'}
+            </Text>
+          </View>
+          <Switch
+            value={forceOfflineMode}
+            onValueChange={setForceOfflineMode}
+            trackColor={{ false: '#ccc', true: THEME_COLORS.warning }}
+            thumbColor={forceOfflineMode ? '#fff' : '#f4f3f4'}
+            disabled={!offlineDataAvailable}
+          />
+        </View>
+
+        {forceOfflineMode && (
+          <View style={styles.warningBox}>
+            <Text style={styles.warningText}>
+              ⚠️ Offline mode is active. All pathfinding will use cached data only.
+            </Text>
+          </View>
+        )}
+
+        {/* Offline Resources Section */}
+        <Text style={[styles.settingsSectionTitle, { marginTop: 25 }]}>📥 Offline Resources</Text>
+        <Text style={styles.settingsDescription}>
+          Download all map data and 360° images for offline use. The app will use cached resources when available.
+        </Text>
+
+        {/* Sync Settings */}
+        <View style={styles.syncSettingsContainer}>
+          <View style={styles.syncSettingRow}>
+            <View style={styles.syncSettingInfo}>
+              <Text style={styles.syncSettingLabel}>🔄 Auto-sync</Text>
+              <Text style={styles.syncSettingDescription}>
+                Automatically check for updates when online
+              </Text>
+            </View>
+            <Switch
+              value={autoSyncEnabled}
+              onValueChange={handleAutoSyncToggle}
+              trackColor={{ false: '#ccc', true: THEME_COLORS.primary }}
+              thumbColor={autoSyncEnabled ? '#fff' : '#f4f3f4'}
+            />
+          </View>
+          
+          <View style={styles.syncSettingRow}>
+            <View style={styles.syncSettingInfo}>
+              <Text style={styles.syncSettingLabel}>📶 WiFi only</Text>
+              <Text style={styles.syncSettingDescription}>
+                Only sync when connected to WiFi (saves mobile data)
+              </Text>
+            </View>
+            <Switch
+              value={wifiOnlySync}
+              onValueChange={handleWifiOnlyToggle}
+              trackColor={{ false: '#ccc', true: THEME_COLORS.primary }}
+              thumbColor={wifiOnlySync ? '#fff' : '#f4f3f4'}
+              disabled={!autoSyncEnabled}
+            />
+          </View>
+        </View>
+
+        {/* Download Progress */}
+        {isDownloading && (
+          <View style={styles.progressContainer}>
+            <View style={styles.progressHeader}>
+              <Text style={styles.progressTitle}>Downloading...</Text>
+              <TouchableOpacity onPress={cancelDownload}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.progressBarContainer}>
+              <View style={[styles.progressBar, { width: `${downloadProgress.percentage}%` }]} />
+            </View>
+            <Text style={styles.progressText}>
+              {downloadProgress.percentage}% - {downloadProgress.currentItem}
+            </Text>
+            <Text style={styles.progressSubtext}>
+              {downloadProgress.completedItems} of {downloadProgress.totalItems} items
+            </Text>
+          </View>
+        )}
+
+        {/* Offline Stats */}
+        {!isDownloading && offlineStats.offlineEnabled && (
+          <View style={styles.statsContainer}>
+            <View style={styles.statsRow}>
+              <Text style={styles.statsLabel}>📍 Nodes cached:</Text>
+              <Text style={styles.statsValue}>{offlineStats.nodesCount}</Text>
+            </View>
+            <View style={styles.statsRow}>
+              <Text style={styles.statsLabel}>🔗 Edges cached:</Text>
+              <Text style={styles.statsValue}>{offlineStats.edgesCount}</Text>
+            </View>
+            <View style={styles.statsRow}>
+              <Text style={styles.statsLabel}>📷 Images cached:</Text>
+              <Text style={styles.statsValue}>{offlineStats.imagesCount}</Text>
+            </View>
+            <View style={styles.statsRow}>
+              <Text style={styles.statsLabel}>💾 Cache size:</Text>
+              <Text style={styles.statsValue}>{offlineStats.cacheSize}</Text>
+            </View>
+            <View style={styles.statsRow}>
+              <Text style={styles.statsLabel}>🕒 Last synced:</Text>
+              <Text style={styles.statsValue}>{formatLastSync(offlineStats.lastSync)}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Download Status Message */}
+        {!isDownloading && downloadProgress.status === 'completed' && (
+          <View style={styles.statusMessage}>
+            <Text style={styles.statusSuccess}>✅ All resources downloaded!</Text>
+          </View>
+        )}
+
+        {!isDownloading && downloadProgress.status === 'error' && (
+          <View style={styles.statusMessage}>
+            <Text style={styles.statusError}>❌ {downloadProgress.error}</Text>
+          </View>
+        )}
+
+        {/* Action Buttons */}
+        <View style={styles.offlineButtonsContainer}>
+          {!offlineStats.offlineEnabled ? (
+            <TouchableOpacity
+              style={[styles.downloadButton, isDownloading && styles.buttonDisabled]}
+              onPress={handleDownload}
+              disabled={isDownloading}
+            >
+              {isDownloading ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <>
+                  <Text style={styles.downloadButtonIcon}>📥</Text>
+                  <Text style={styles.downloadButtonText}>Download All Resources</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={[styles.updateButton, isDownloading && styles.buttonDisabled]}
+                onPress={handleCheckUpdates}
+                disabled={isDownloading}
+              >
+                <Text style={styles.updateButtonText}>🔄 Check for Updates</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.redownloadButton, isDownloading && styles.buttonDisabled]}
+                onPress={handleDownload}
+                disabled={isDownloading}
+              >
+                <Text style={styles.redownloadButtonText}>📥 Re-download All</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.clearCacheButton, isDownloading && styles.buttonDisabled]}
+                onPress={handleClearCache}
+                disabled={isDownloading}
+              >
+                <Text style={styles.clearCacheButtonText}>🗑️ Clear Cache</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.advancedSettingsButton}
+                onPress={onOpenOfflineSettings}
+              >
+                <Text style={styles.advancedSettingsButtonText}>⚙️ Advanced Offline Settings</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        <View style={{ height: 20 }} />
+      </ScrollView>
+
+      <TouchableOpacity style={styles.settingsCloseButton} onPress={onClose}>
+        <Text style={styles.settingsCloseButtonText}>Done</Text>
+      </TouchableOpacity>
+    </View>
   );
 };
 
@@ -479,6 +870,25 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#FFFFFF',
+  },
+  offlineIndicator: {
+    fontSize: 12,
+    color: '#FFD700',
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  offlineBanner: {
+    backgroundColor: '#FFF3CD',
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9800',
+    padding: 12,
+    marginBottom: 15,
+    borderRadius: 8,
+  },
+  offlineBannerText: {
+    color: '#856404',
+    fontSize: 13,
+    lineHeight: 18,
   },
   headerButtons: {
     flexDirection: 'row',
@@ -815,6 +1225,35 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: THEME_COLORS.primary,
   },
+  syncSettingsContainer: {
+    marginVertical: 12,
+  },
+  syncSettingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  syncSettingInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  syncSettingLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#000000',
+    marginBottom: 2,
+  },
+  syncSettingDescription: {
+    fontSize: 12,
+    color: THEME_COLORS.textSecondary,
+    lineHeight: 16,
+  },
   settingsCloseButton: {
     backgroundColor: THEME_COLORS.primary,
     padding: 15,
@@ -826,6 +1265,185 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  // New styles for offline feature
+  settingsScrollView: {
+    maxHeight: 400,
+  },
+  settingsSectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: THEME_COLORS.text,
+    marginBottom: 8,
+  },
+  progressContainer: {
+    backgroundColor: '#F0F7FF',
+    borderRadius: 12,
+    padding: 16,
+    marginVertical: 12,
+    borderWidth: 1,
+    borderColor: '#E0E8F0',
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  progressTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: THEME_COLORS.primary,
+  },
+  cancelText: {
+    fontSize: 14,
+    color: THEME_COLORS.error,
+    fontWeight: '600',
+  },
+  progressBarContainer: {
+    height: 8,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: THEME_COLORS.primary,
+    borderRadius: 4,
+  },
+  progressText: {
+    fontSize: 13,
+    color: THEME_COLORS.text,
+    marginBottom: 4,
+  },
+  progressSubtext: {
+    fontSize: 12,
+    color: THEME_COLORS.textSecondary,
+  },
+  statsContainer: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    padding: 16,
+    marginVertical: 12,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  statsLabel: {
+    fontSize: 14,
+    color: THEME_COLORS.textSecondary,
+  },
+  statsValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: THEME_COLORS.text,
+  },
+  statusMessage: {
+    paddingVertical: 10,
+  },
+  statusSuccess: {
+    fontSize: 14,
+    color: THEME_COLORS.success,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  statusError: {
+    fontSize: 14,
+    color: THEME_COLORS.error,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  warningBox: {
+    backgroundColor: '#FFF3E0',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: THEME_COLORS.warning,
+  },
+  warningText: {
+    fontSize: 13,
+    color: '#F57C00',
+    fontWeight: '500',
+  },
+  offlineButtonsContainer: {
+    marginTop: 10,
+    gap: 10,
+  },
+  downloadButton: {
+    backgroundColor: THEME_COLORS.primary,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    gap: 8,
+  },
+  downloadButtonIcon: {
+    fontSize: 18,
+  },
+  downloadButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  updateButton: {
+    backgroundColor: '#E3F2FD',
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: THEME_COLORS.primary,
+  },
+  updateButtonText: {
+    color: THEME_COLORS.primary,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  redownloadButton: {
+    backgroundColor: '#FFF3E0',
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: THEME_COLORS.warning,
+  },
+  redownloadButtonText: {
+    color: THEME_COLORS.warning,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  clearCacheButton: {
+    backgroundColor: '#FFEBEE',
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: THEME_COLORS.error,
+  },
+  clearCacheButtonText: {
+    color: THEME_COLORS.error,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  advancedSettingsButton: {
+    backgroundColor: '#F5F5F5',
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  advancedSettingsButtonText: {
+    color: THEME_COLORS.textSecondary,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
 });
 

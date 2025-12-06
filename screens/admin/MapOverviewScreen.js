@@ -196,10 +196,12 @@ const MapOverviewScreen = ({ navigation }) => {
       (n) => n.map_x !== null && n.map_y !== null
     );
 
-    // Calculate dot size based on zoom
+    // Calculate dot size that gets smaller as zoom increases
     const baseDotSize = 8;
-    const dotSize = Math.max(4, baseDotSize / currentZoom);
-    const strokeWidth = Math.max(1, 2 / currentZoom);
+    const dotSize = Math.max(3, baseDotSize / Math.sqrt(currentZoom));
+    const strokeWidth = Math.max(0.5, 2 / currentZoom);
+    const glowRadius = Math.max(2, 4 / currentZoom);
+    const selectionRadius = Math.max(3, 6 / currentZoom);
 
     return (
       <Svg
@@ -230,7 +232,7 @@ const MapOverviewScreen = ({ navigation }) => {
               x2={x2}
               y2={y2}
               stroke="rgba(0, 150, 255, 0.5)"
-              strokeWidth={Math.max(1, 2 / currentZoom)}
+              strokeWidth={Math.max(0.5, 2 / currentZoom)}
             />
           );
         })}
@@ -249,7 +251,7 @@ const MapOverviewScreen = ({ navigation }) => {
                 <Circle
                   cx={x}
                   cy={y}
-                  r={dotSize + 4 / currentZoom}
+                  r={dotSize + glowRadius}
                   fill="rgba(255, 215, 0, 0.4)"
                 />
               )}
@@ -258,10 +260,10 @@ const MapOverviewScreen = ({ navigation }) => {
                 <Circle
                   cx={x}
                   cy={y}
-                  r={dotSize + 6 / currentZoom}
+                  r={dotSize + selectionRadius}
                   fill="none"
                   stroke="#FFFFFF"
-                  strokeWidth={3 / currentZoom}
+                  strokeWidth={Math.max(1, 3 / currentZoom)}
                 />
               )}
               <Circle
