@@ -100,25 +100,34 @@ const MapDisplayScreen = ({ route, navigation }) => {
 
   // Helper function to get image URL with offline cache support
   const getImageUrlWithCache = async (node) => {
-    if (!node || !node.image360) return null;
+    if (!node) return null;
+    
+    // Handle both property names: image360 and image360_url
+    const remoteImageUrl = node.image360 || node.image360_url;
+    if (!remoteImageUrl) return null;
     
     try {
+      console.log(`Getting image for node ${node.node_id}...`);
+      
       // Always check for cached version first (even when online)
       const cachedUrl = await OfflineService.getImageUrl({
         node_id: node.node_id,
-        image360_url: node.image360,
+        image360: remoteImageUrl,
+        image360_url: remoteImageUrl,
       });
       
       // If we have a cached local file, ALWAYS use it (even when online)
       if (cachedUrl && cachedUrl.startsWith('file://')) {
+        console.log(`✅ Using cached image for node ${node.node_id}`);
         return cachedUrl;
       }
       
-      // Only use Cloudinary if no cached version exists
-      return getOptimizedImageUrl(node.image360, imageQuality);
+      // Only use Cloudinary/remote if no cached version exists
+      console.log(`🌐 Using remote image for node ${node.node_id}`);
+      return getOptimizedImageUrl(remoteImageUrl, imageQuality);
     } catch (error) {
       console.error('Error getting cached image URL:', error);
-      return getOptimizedImageUrl(node.image360, imageQuality);
+      return getOptimizedImageUrl(remoteImageUrl, imageQuality);
     }
   };
 

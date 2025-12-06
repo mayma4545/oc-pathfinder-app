@@ -211,8 +211,10 @@ class OfflineService {
       const localFile = this.getLocal360ImagePath(node.node_id);
       
       if (localFile.exists) {
-        console.log(`Using cached image for node ${node.node_id}`);
+        console.log(`📦 Using cached image for node ${node.node_id}: ${localFile.uri}`);
         return localFile.uri;
+      } else {
+        console.log(`🌐 No cache for node ${node.node_id}, using remote: ${imageUrl}`);
       }
       
       // Fall back to remote URL if not cached
@@ -235,8 +237,10 @@ class OfflineService {
       const localFile = this.getLocalCampusMapPath(mapId);
       
       if (localFile.exists) {
-        console.log(`Using cached campus map image`);
+        console.log(`📦 Using cached campus map image: ${localFile.uri}`);
         return localFile.uri;
+      } else {
+        console.log(`🌐 No cached map, using remote: ${mapImageUrl}`);
       }
       
       // Fall back to remote URL if not cached
@@ -252,10 +256,51 @@ class OfflineService {
    */
   async downloadImage(url, filename) {
     try {
-      await File.downloadFileAsync(url, IMAGE_360_DIR);
+      if (!url) {
+        console.warn('No URL provided for image download');
+        return false;
+      }
+
+      console.log(`Downloading image: ${filename}`);
+      const localFile = new File(IMAGE_360_DIR, filename);
+      
+      // Download using fetch and get as blob
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      // Get response as blob, then convert to base64
+      const blob = await response.blob();
+      
+      // Use FileReader to convert blob to base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result;
+          resolve(base64data);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      
+      // Extract the base64 data (remove data:image/jpeg;base64, prefix)
+      const base64Data = base64.split(',')[1];
+      
+      // Convert base64 to Uint8Array
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      // Write to file
+      await localFile.write(bytes);
+      
+      console.log(`✅ Downloaded: ${filename} (${(bytes.length / 1024 / 1024).toFixed(2)} MB)`);
       return true;
     } catch (error) {
-      console.error(`Failed to download image: ${url}`, error);
+      console.error(`❌ Failed to download image: ${url}`, error.message);
       return false;
     }
   }
@@ -394,7 +439,9 @@ class OfflineService {
       const campusMap = mapResponse.success ? mapResponse.map : null;
 
       // Calculate total items to download
-      const nodesWithImages = nodes.filter(n => n.image360_url);
+      const nodesWithImages = nodes.filter(n => n.image360_url || n.image360);
+      console.log(`📋 Nodes with images: ${nodesWithImages.length}/${nodes.length}`);
+      
       const totalItems = 3 + nodesWithImages.length + (campusMap?.image_url ? 1 : 0);
       // 3 = save nodes + save edges + save campus map data
 
@@ -433,8 +480,12 @@ class OfflineService {
       }
 
       // Step 4: Download all 360° images
+      console.log(`\n📸 Starting image download for ${nodesWithImages.length} nodes...`);
+      
       for (let i = 0; i < nodesWithImages.length; i++) {
         const node = nodesWithImages[i];
+        const imageUrl = node.image360_url || node.image360;
+        
         this.updateProgress({
           currentItem: `Downloading image ${i + 1}/${nodesWithImages.length}: ${node.name}`,
         });
@@ -443,12 +494,20 @@ class OfflineService {
         
         // Check if already cached
         if (!localFile.exists) {
-          await this.downloadImage(node.image360_url, `node_${node.node_id}.jpg`);
+          console.log(`  Downloading node ${node.node_id}: ${node.name}`);
+          const success = await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`);
+          if (!success) {
+            console.warn(`  ⚠️ Failed to download image for node ${node.node_id}`);
+          }
+        } else {
+          console.log(`  ✅ Already cached: node ${node.node_id}`);
         }
 
         completedItems++;
         this.updateProgress({ completedItems });
       }
+      
+      console.log(`✅ Image download complete`);
 
       // Step 5: Initialize pathfinder with downloaded data
       this.updateProgress({
@@ -540,19 +599,25 @@ class OfflineService {
       const nodesChanged = !localNodes || localNodes.length !== serverNodes.length;
       const edgesChanged = !localEdges || localEdges.length !== serverEdges.length;
       
+      // Calculate new nodes
+      const localNodeIds = new Set((localNodes || []).map(n => n.node_id));
+      const newNodesAdded = serverNodes.filter(n => !localNodeIds.has(n.node_id));
+      
       // Find nodes with new/updated images
       const localNodeMap = new Map((localNodes || []).map(n => [n.node_id, n]));
       const nodesNeedingImages = serverNodes.filter(serverNode => {
-        if (!serverNode.image360_url) return false;
+        const imageUrl = serverNode.image360_url || serverNode.image360;
+        if (!imageUrl) return false;
         
         const localNode = localNodeMap.get(serverNode.node_id);
         // Download if: new node OR image URL changed
-        return !localNode || localNode.image360_url !== serverNode.image360_url;
+        return !localNode || localNode.image360_url !== imageUrl || localNode.image360 !== imageUrl;
       });
 
       console.log('Changes detected:');
       console.log('  - Nodes changed:', nodesChanged);
       console.log('  - Edges changed:', edgesChanged);
+      console.log('  - New nodes:', newNodesAdded.length);
       console.log('  - Images to download:', nodesNeedingImages.length);
 
       // Always update nodes and edges data (they're small)
@@ -599,16 +664,20 @@ class OfflineService {
       // Download new images
       for (let i = 0; i < nodesNeedingImages.length; i++) {
         const node = nodesNeedingImages[i];
+        const imageUrl = node.image360_url || node.image360;
+        
         this.updateProgress({
           currentItem: `Downloading new image: ${node.name}`,
           completedItems: i + 2,
         });
 
-        const localPath = this.getLocal360ImagePath(node.node_id);
-        await this.downloadImage(node.image360_url, `node_${node.node_id}.jpg`);
+        await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`);
       }
 
       await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
+      
+      // Reset pathfinder after updating
+      resetPathfinder();
 
       this.updateProgress({
         status: 'completed',
@@ -621,7 +690,7 @@ class OfflineService {
       return {
         success: true,
         hasUpdates: true,
-        newNodes: newNodes.length,
+        newNodes: newNodesAdded.length,
         newImages: nodesNeedingImages.length,
       };
 
