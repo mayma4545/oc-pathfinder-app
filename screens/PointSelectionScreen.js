@@ -49,7 +49,33 @@ const PointSelectionScreen = ({ navigation }) => {
   const [forceOfflineMode, setForceOfflineMode] = useState(false); // Manual offline mode toggle
 
   useEffect(() => {
-    loadNodes();
+    const initializeApp = async () => {
+      // Check if this is first time (no cache)
+      const cachedNodes = await OfflineService.getNodes();
+      const isFirstTime = !cachedNodes || cachedNodes.length === 0;
+      
+      if (isFirstTime) {
+        console.log('\ud83c\udd95 First time setup: downloading essential data (nodes & edges)...');
+        // First time - download nodes and edges automatically
+        await loadNodes(true); // Force fetch from API
+        
+        // Also download all edges for complete offline navigation
+        try {
+          const edgesResponse = await ApiService.getEdges();
+          if (edgesResponse.success && edgesResponse.edges) {
+            await OfflineService.saveEdges(edgesResponse.edges);
+            console.log('\u2705 Initial edges cached:', edgesResponse.edges.length);
+          }
+        } catch (err) {
+          console.warn('Failed to download initial edges:', err);
+        }
+      } else {
+        // Not first time - load from cache
+        await loadNodes();
+      }
+    };
+    
+    initializeApp();
     loadImageQualitySetting();
     checkOfflineData();
     
@@ -77,14 +103,37 @@ const PointSelectionScreen = ({ navigation }) => {
     console.log('Search query:', searchQuery, '| Filtered count:', filteredNodes.length, '| Total nodes:', nodes.length);
   }, [searchQuery, nodes]);
 
-  const loadNodes = async () => {
+  const loadNodes = async (forceRefresh = false) => {
     try {
       setLoading(true);
+      
+      // First, try to load from cache (unless force refresh)
+      if (!forceRefresh) {
+        const cachedNodes = await OfflineService.getNodes();
+        if (cachedNodes && cachedNodes.length > 0) {
+          console.log('✅ Loaded nodes from cache:', cachedNodes.length);
+          setNodes(cachedNodes);
+          setFilteredNodes(cachedNodes);
+          setLoading(false);
+          return;
+        }
+      }
+      
+      // Cache is empty or force refresh - fetch from API
+      console.log(forceRefresh ? '🔄 Force refreshing nodes from API...' : '🌐 Cache empty, fetching nodes from API...');
       const response = await ApiService.getNodes();
       console.log('Nodes response:', response);
       if (response.success) {
         setNodes(response.nodes);
         setFilteredNodes(response.nodes);
+        
+        // Save to cache if fetched from API
+        if (!response.offline) {
+          console.log('📦 Saving nodes to cache...');
+          await OfflineService.saveNodes(response.nodes);
+          console.log('✅ Nodes saved to cache');
+          checkOfflineData();
+        }
       } else {
         console.error('Failed to load nodes:', response);
         Alert.alert('Error', response.error || 'Failed to load nodes');
@@ -274,6 +323,13 @@ const PointSelectionScreen = ({ navigation }) => {
           )}
         </TouchableOpacity>
         <View style={styles.headerButtons}>
+          <TouchableOpacity
+            style={styles.refreshButton}
+            onPress={() => loadNodes(true)}
+            disabled={loading}
+          >
+            <Text style={styles.refreshButtonText}>{loading ? '⟳' : '🔄'}</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.settingsButton}
             onPress={() => setSettingsModalVisible(true)}
@@ -532,7 +588,7 @@ const SettingsModalContent = ({ imageQuality, saveImageQualitySetting, onClose, 
   } = useDownload();
 
   // Sync settings state
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(false);
   const [wifiOnlySync, setWifiOnlySync] = useState(false);
 
   useEffect(() => {
@@ -562,8 +618,8 @@ const SettingsModalContent = ({ imageQuality, saveImageQualitySetting, onClose, 
 
   const handleDownload = async () => {
     Alert.alert(
-      'Download Resources',
-      'This will download all nodes, edges, and 360° images for offline use. This may take a while and use significant storage space. Continue?',
+      'Download Map Data',
+      'This will download nodes, edges, and campus map for offline testing. Images will be downloaded when you view them. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
@@ -573,7 +629,7 @@ const SettingsModalContent = ({ imageQuality, saveImageQualitySetting, onClose, 
             if (result.success) {
               Alert.alert(
                 'Download Complete',
-                `Downloaded ${result.nodesCount} nodes, ${result.edgesCount} edges, and ${result.imagesCount} images.`
+                result.message || 'Map data downloaded successfully. You can now use Force Offline Mode!'
               );
             } else if (result.error !== 'Download already in progress') {
               Alert.alert('Download Failed', result.error || 'An error occurred');
@@ -671,7 +727,7 @@ const SettingsModalContent = ({ imageQuality, saveImageQualitySetting, onClose, 
                 ? 'App will use offline pathfinding only' 
                 : offlineDataAvailable 
                   ? 'Ready to test offline navigation'
-                  : 'Download offline data first'}
+                  : '⚠️ Download map data first to enable'}
             </Text>
           </View>
           <Switch
@@ -682,6 +738,14 @@ const SettingsModalContent = ({ imageQuality, saveImageQualitySetting, onClose, 
             disabled={!offlineDataAvailable}
           />
         </View>
+
+        {!offlineDataAvailable && (
+          <View style={styles.warningBox}>
+            <Text style={styles.warningText}>
+              💡 To enable offline mode testing, tap "Download Map Data" below to download nodes and edges first.
+            </Text>
+          </View>
+        )}
 
         {forceOfflineMode && (
           <View style={styles.warningBox}>
@@ -894,6 +958,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+  },
+  refreshButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  refreshButtonText: {
+    fontSize: 20,
   },
   settingsButton: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',

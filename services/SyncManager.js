@@ -117,9 +117,10 @@ class SyncManager {
   async isAutoSyncEnabled() {
     try {
       const enabled = await AsyncStorage.getItem(SYNC_KEYS.AUTO_SYNC_ENABLED);
-      return enabled !== 'false'; // Default to true
+      // Default to FALSE - sync is OFF by default
+      return enabled === 'true';
     } catch {
-      return true;
+      return false; // Default disabled
     }
   }
 
@@ -162,22 +163,40 @@ class SyncManager {
     this.updateStatus({ status: 'syncing', message: 'Checking for updates...' });
 
     try {
-      const result = await OfflineService.checkAndUpdateResources(ApiService);
+      // Check if data needs updating using version comparison
+      const versionCheck = await OfflineService.checkIfDataNeedsUpdate(ApiService);
+      
+      if (versionCheck.error) {
+        throw new Error(versionCheck.error);
+      }
+
+      if (!versionCheck.needsUpdate) {
+        this.updateStatus({
+          status: 'success',
+          lastSync: new Date(),
+          hasUpdates: false,
+          message: 'All data is up to date',
+        });
+        this.syncInProgress = false;
+        return { success: true, hasUpdates: false };
+      }
+
+      // Data needs updating - download metadata only
+      console.log('Server has updates:', versionCheck.changes);
+      this.updateStatus({ message: 'Downloading updates...' });
+      
+      const result = await OfflineService.downloadMetadataOnly(ApiService);
       
       if (result.success) {
         this.updateStatus({
           status: 'success',
           lastSync: new Date(),
-          hasUpdates: result.hasUpdates,
-          message: result.hasUpdates 
-            ? `Updated: ${result.newNodes || 0} nodes, ${result.newImages || 0} images`
-            : 'All data is up to date',
+          hasUpdates: true,
+          message: `Updated: ${result.nodesCount} nodes, ${result.edgesCount} edges (images load on-demand)`,
         });
 
         // Reset pathfinder if data changed
-        if (result.hasUpdates) {
-          OfflineService.resetPathfinder();
-        }
+        OfflineService.resetPathfinder();
       } else {
         this.updateStatus({
           status: 'error',

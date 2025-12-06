@@ -19,6 +19,7 @@ export const API_ENDPOINTS = {
   FIND_PATH: '/api/mobile/find-path/',
   EDGES_LIST: '/api/mobile/edges/',
   ANNOTATIONS_LIST: '/api/mobile/annotations/',
+  DATA_VERSION: '/api/mobile/data-version/',
   
   // Admin endpoints
   ADMIN_LOGIN: '/api/mobile/admin/login/',

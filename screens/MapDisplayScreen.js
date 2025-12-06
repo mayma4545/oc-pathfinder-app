@@ -109,20 +109,30 @@ const MapDisplayScreen = ({ route, navigation }) => {
     try {
       console.log(`Getting image for node ${node.node_id}...`);
       
-      // Always check for cached version first (even when online)
-      const cachedUrl = await OfflineService.getImageUrl({
-        node_id: node.node_id,
-        image360: remoteImageUrl,
-        image360_url: remoteImageUrl,
-      });
+      // Check if already cached
+      const isCached = await OfflineService.isImageCached(node.node_id);
       
-      // If we have a cached local file, ALWAYS use it (even when online)
-      if (cachedUrl && cachedUrl.startsWith('file://')) {
+      if (isCached) {
+        const localFile = OfflineService.getLocal360ImagePath(node.node_id);
         console.log(`✅ Using cached image for node ${node.node_id}`);
-        return cachedUrl;
+        return localFile.uri;
       }
       
-      // Only use Cloudinary/remote if no cached version exists
+      // Not cached - download on-demand if online
+      const NetInfo = require('@react-native-community/netinfo').default;
+      const netInfo = await NetInfo.fetch();
+      
+      if (netInfo.isConnected) {
+        console.log(`📥 Downloading image on-demand for node ${node.node_id}...`);
+        const localUri = await OfflineService.downloadImageOnDemand(remoteImageUrl, node.node_id);
+        
+        if (localUri) {
+          console.log(`✅ Image downloaded and cached: node ${node.node_id}`);
+          return localUri;
+        }
+      }
+      
+      // Fallback to remote URL if download failed or offline
       console.log(`🌐 Using remote image for node ${node.node_id}`);
       return getOptimizedImageUrl(remoteImageUrl, imageQuality);
     } catch (error) {
@@ -385,6 +395,57 @@ const MapDisplayScreen = ({ route, navigation }) => {
 
       setPathData(pathResponse);
       
+      // Auto-cache path data in background for offline use (if online)
+      if (!pathResponse.offline && pathResponse.path) {
+        // Extract edges from the path
+        const pathEdges = [];
+        for (let i = 0; i < pathResponse.path.length - 1; i++) {
+          const currentNode = pathResponse.path[i];
+          const nextNode = pathResponse.path[i + 1];
+          
+          pathEdges.push({
+            from_node_id: currentNode.node_id,
+            to_node_id: nextNode.node_id,
+            distance: nextNode.distance_from_prev || 0,
+            compass_angle: nextNode.compass_angle || 0,
+            is_staircase: nextNode.is_staircase || false,
+            is_active: true,
+          });
+        }
+        
+        // Only merge and save if we have new edges
+        OfflineService.getEdges().then(async (existingEdges) => {
+          const edgeMap = new Map();
+          
+          // Add existing edges
+          (existingEdges || []).forEach(edge => {
+            const key = `${edge.from_node_id}-${edge.to_node_id}`;
+            edgeMap.set(key, edge);
+          });
+          
+          const initialCount = edgeMap.size;
+          
+          // Add new path edges
+          pathEdges.forEach(edge => {
+            const key = `${edge.from_node_id}-${edge.to_node_id}`;
+            edgeMap.set(key, edge);
+          });
+          
+          // Only save if we actually have new edges
+          if (edgeMap.size > initialCount) {
+            const mergedEdges = Array.from(edgeMap.values());
+            await OfflineService.saveEdges(mergedEdges);
+            console.log(`📦 Auto-cached ${edgeMap.size - initialCount} new edges (total: ${edgeMap.size})`);
+            
+            // Reset pathfinder to reload with new edges
+            const { resetPathfinder } = require('../utils/pathfinding');
+            resetPathfinder();
+          } else {
+            console.log('ℹ️ All edges already cached, skipping save');
+          }
+        }).catch(err => console.warn('Failed to auto-cache path edges:', err));
+      }
+      
       // Track if this was an offline route
       if (pathResponse.offline || isOfflineMode) {
         setIsOfflineRoute(true);
@@ -393,10 +454,28 @@ const MapDisplayScreen = ({ route, navigation }) => {
         setOfflineStats(stats);
       }
 
+      // Pre-download images for the path nodes in the background
+      if (pathResponse.path && pathResponse.path.length > 0) {
+        console.log('📥 Starting background download of path images...');
+        OfflineService.downloadPathImages(pathResponse.path)
+          .then(imageMap => {
+            console.log(`✅ Downloaded ${Object.keys(imageMap).length} path images`);
+          })
+          .catch(err => console.warn('Failed to download path images:', err));
+      }
+
       // Load campus map
       const mapResponse = await ApiService.getCampusMap();
       if (mapResponse.success) {
         setCampusMap(mapResponse.map);
+        
+        // Auto-cache campus map metadata (not the image)
+        if (!mapResponse.offline) {
+          console.log('📦 Auto-caching campus map metadata...');
+          OfflineService.saveCampusMap(mapResponse.map)
+            .then(() => console.log('✅ Campus map metadata auto-cached'))
+            .catch(err => console.warn('Failed to auto-cache campus map:', err));
+        }
         
         // Load cached campus map image URL
         const cachedMapUrl = await getCampusMapImageUrlWithCache(mapResponse.map.image_url);

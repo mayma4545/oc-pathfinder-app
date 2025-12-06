@@ -241,23 +241,35 @@ const OfflineSettingsScreen = ({ navigation }) => {
         {/* Stats */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Cached Data</Text>
+          <Text style={styles.sectionDescription}>
+            Essential data (nodes & edges) auto-cached for offline navigation. Images downloaded individually when viewed.
+          </Text>
           <View style={styles.statsGrid}>
             <View style={styles.statBox}>
               <Text style={styles.statNumber}>{offlineStats.nodesCount}</Text>
               <Text style={styles.statLabel}>Locations</Text>
+              <Text style={styles.statPriority}>⭐ Essential</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={styles.statNumber}>{offlineStats.edgesCount}</Text>
               <Text style={styles.statLabel}>Paths</Text>
+              <Text style={styles.statPriority}>⭐ Essential</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={styles.statNumber}>{offlineStats.imagesCount}</Text>
               <Text style={styles.statLabel}>Images</Text>
+              <Text style={styles.statPriority}>📸 On-Demand</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={styles.statNumber}>{offlineStats.cacheSize}</Text>
               <Text style={styles.statLabel}>Storage</Text>
             </View>
+          </View>
+          <View style={styles.autoSyncInfo}>
+            <Text style={styles.autoSyncText}>
+              ⭐ Nodes & edges auto-cached for offline navigation (~80KB){'\n'}
+              📸 Images stream online; download via "Download All Data" for offline viewing
+            </Text>
           </View>
         </View>
 
@@ -268,7 +280,7 @@ const OfflineSettingsScreen = ({ navigation }) => {
           <View style={styles.settingRow}>
             <View style={styles.settingInfo}>
               <Text style={styles.settingLabel}>Auto-sync</Text>
-              <Text style={styles.settingDesc}>Automatically check for updates when online</Text>
+              <Text style={styles.settingDesc}>Automatically download new/missing data when online (no duplicates)</Text>
             </View>
             <Switch
               value={autoSync}
@@ -314,7 +326,7 @@ const OfflineSettingsScreen = ({ navigation }) => {
             <Text style={styles.actionBtnIcon}>📥</Text>
             <View style={styles.actionBtnContent}>
               <Text style={styles.actionBtnText}>Download All Data</Text>
-              <Text style={styles.actionBtnDesc}>Full download including all images</Text>
+              <Text style={styles.actionBtnDesc}>Download all images for complete offline experience (~100MB)</Text>
             </View>
           </TouchableOpacity>
 
@@ -465,6 +477,12 @@ const styles = StyleSheet.create({
     color: THEME_COLORS.text,
     marginBottom: 12,
   },
+  sectionDescription: {
+    fontSize: 13,
+    color: THEME_COLORS.textSecondary,
+    marginBottom: 12,
+    lineHeight: 18,
+  },
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -487,6 +505,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: THEME_COLORS.textSecondary,
     marginTop: 4,
+  },
+  statPriority: {
+    fontSize: 10,
+    color: THEME_COLORS.primary,
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  autoSyncInfo: {
+    backgroundColor: '#E3F2FD',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 8,
+  },
+  autoSyncText: {
+    fontSize: 12,
+    color: '#1565C0',
+    lineHeight: 20,
   },
   settingRow: {
     flexDirection: 'row',

@@ -18,6 +18,7 @@ const STORAGE_KEYS = {
   DATA_VERSION: '@offline_data_version',
   OFFLINE_ENABLED: '@offline_enabled',
   DOWNLOAD_PROGRESS: '@offline_download_progress',
+  SERVER_DATA_VERSION: '@server_data_version',
 };
 
 // Directory instances for cached images
@@ -118,7 +119,19 @@ class OfflineService {
     try {
       const savedProgress = await AsyncStorage.getItem(STORAGE_KEYS.DOWNLOAD_PROGRESS);
       if (savedProgress) {
-        this.downloadProgress = JSON.parse(savedProgress);
+        const progress = JSON.parse(savedProgress);
+        
+        // If download was completed or errored, don't restore the downloading state
+        if (progress.status === 'completed' || progress.status === 'error') {
+          this.downloadProgress = {
+            ...progress,
+            status: 'idle', // Reset to idle so it doesn't show as downloading
+          };
+        } else {
+          this.downloadProgress = progress;
+        }
+        
+        console.log('📂 Loaded download progress:', this.downloadProgress.status);
       }
       return this.downloadProgress;
     } catch (error) {
@@ -133,8 +146,11 @@ class OfflineService {
   async isOfflineEnabled() {
     try {
       const enabled = await AsyncStorage.getItem(STORAGE_KEYS.OFFLINE_ENABLED);
-      return enabled === 'true';
+      const isEnabled = enabled === 'true';
+      console.log(`🔍 Offline enabled check: ${isEnabled} (stored value: ${enabled})`);
+      return isEnabled;
     } catch (error) {
+      console.error('Failed to check offline enabled:', error);
       return false;
     }
   }
@@ -144,7 +160,9 @@ class OfflineService {
    */
   async setOfflineEnabled(enabled) {
     try {
+      console.log(`📦 Setting offline enabled: ${enabled}`);
       await AsyncStorage.setItem(STORAGE_KEYS.OFFLINE_ENABLED, enabled ? 'true' : 'false');
+      console.log(`✅ Offline enabled flag saved: ${enabled}`);
     } catch (error) {
       console.error('Failed to set offline enabled:', error);
     }
@@ -159,6 +177,88 @@ class OfflineService {
       return timestamp ? new Date(timestamp) : null;
     } catch (error) {
       return null;
+    }
+  }
+
+  /**
+   * Save server data version
+   */
+  async saveServerDataVersion(versionData) {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.SERVER_DATA_VERSION, JSON.stringify(versionData));
+      console.log('✅ Server data version saved');
+    } catch (error) {
+      console.error('Failed to save server data version:', error);
+    }
+  }
+
+  /**
+   * Get saved server data version
+   */
+  async getSavedDataVersion() {
+    try {
+      const data = await AsyncStorage.getItem(STORAGE_KEYS.SERVER_DATA_VERSION);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      console.error('Failed to get saved data version:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if local data needs updating by comparing versions
+   * Returns { needsUpdate: boolean, changes: object }
+   */
+  async checkIfDataNeedsUpdate(apiService) {
+    try {
+      // Get current server version
+      const serverVersion = await apiService.getDataVersion();
+      if (!serverVersion.success) {
+        throw new Error('Failed to get server version');
+      }
+
+      // Get saved version
+      const savedVersion = await this.getSavedDataVersion();
+      
+      if (!savedVersion) {
+        // No saved version, needs initial download
+        return { needsUpdate: true, changes: { initial: true } };
+      }
+
+      const changes = {};
+      let needsUpdate = false;
+
+      // Compare timestamps
+      if (new Date(serverVersion.version.nodes_updated) > new Date(savedVersion.nodes_updated)) {
+        changes.nodes = true;
+        needsUpdate = true;
+      }
+      if (new Date(serverVersion.version.edges_updated) > new Date(savedVersion.edges_updated)) {
+        changes.edges = true;
+        needsUpdate = true;
+      }
+      if (new Date(serverVersion.version.annotations_updated) > new Date(savedVersion.annotations_updated)) {
+        changes.annotations = true;
+        needsUpdate = true;
+      }
+
+      // Also check counts
+      if (serverVersion.version.nodes_count !== savedVersion.nodes_count) {
+        changes.nodes = true;
+        changes.nodeCountChanged = true;
+        needsUpdate = true;
+      }
+      if (serverVersion.version.edges_count !== savedVersion.edges_count) {
+        changes.edges = true;
+        changes.edgeCountChanged = true;
+        needsUpdate = true;
+      }
+
+      return { needsUpdate, changes, serverVersion: serverVersion.version };
+    } catch (error) {
+      console.error('Error checking data version:', error);
+      // If we can't check, assume no update needed
+      return { needsUpdate: false, error: error.message };
     }
   }
 
@@ -386,11 +486,193 @@ class OfflineService {
   }
 
   /**
+   * Download only nodes and edges metadata (without images)
+   * This is the initial lightweight download for point selection
+   */
+  async downloadMetadataOnly(apiService) {
+    console.log('\n=== Download Metadata Only (No Images) ===');
+    
+    if (this.isDownloading) {
+      console.log('⚠️ Download already in progress');
+      return { success: false, error: 'Download already in progress' };
+    }
+
+    this.isDownloading = true;
+    await this.initialize();
+
+    try {
+      // Reset progress (nodes + edges + campus map data + campus map image = 5 items max)
+      this.updateProgress({
+        status: 'downloading',
+        totalItems: 5,
+        completedItems: 0,
+        currentItem: 'Fetching data...',
+        percentage: 0,
+        error: null,
+      });
+
+      // Step 1: Fetch nodes and edges from API
+      this.updateProgress({ currentItem: 'Fetching nodes...' });
+      const nodesResponse = await apiService.getNodes();
+      if (!nodesResponse.success) {
+        throw new Error('Failed to fetch nodes');
+      }
+      const nodes = nodesResponse.nodes || [];
+
+      this.updateProgress({ currentItem: 'Fetching edges...', completedItems: 1 });
+      const edgesResponse = await apiService.getEdges();
+      if (!edgesResponse.success) {
+        throw new Error('Failed to fetch edges');
+      }
+      const edges = edgesResponse.edges || [];
+      console.log('Downloaded nodes:', nodes.length, 'edges:', edges.length);
+
+      // Step 2: Save data to local storage (without downloading node images)
+      this.updateProgress({ currentItem: 'Saving nodes data...', completedItems: 2 });
+      await this.saveNodes(nodes);
+
+      this.updateProgress({ currentItem: 'Saving edges data...', completedItems: 2 });
+      await this.saveEdges(edges);
+
+      // Step 3: Download campus map
+      this.updateProgress({ currentItem: 'Fetching campus map...', completedItems: 3 });
+      const mapResponse = await apiService.getCampusMap();
+      const campusMap = mapResponse.success ? mapResponse.map : null;
+
+      let completedItems = 3;
+
+      if (campusMap) {
+        this.updateProgress({ currentItem: 'Saving campus map data...' });
+        await this.saveCampusMap(campusMap);
+        completedItems++;
+
+        // Download campus map image
+        if (campusMap.image_url) {
+          this.updateProgress({ currentItem: 'Downloading campus map image...' });
+          const mapId = campusMap.map_id || 'main';
+          await this.downloadImage(campusMap.image_url, `map_${mapId}.jpg`);
+          completedItems++;
+          console.log('✅ Campus map image downloaded');
+        }
+      }
+
+      this.updateProgress({ completedItems });
+
+      // Step 4: Initialize pathfinder with downloaded data
+      try {
+        resetPathfinder();
+        await this.initializePathfinder();
+        console.log('✅ Pathfinder initialized successfully');
+      } catch (error) {
+        console.error('Error initializing pathfinder:', error);
+      }
+
+      // Step 5: Get and save server data version
+      try {
+        const versionData = await apiService.getDataVersion();
+        if (versionData.success) {
+          await this.saveServerDataVersion(versionData.version);
+        }
+      } catch (error) {
+        console.error('Failed to save server data version:', error);
+      }
+
+      // Update sync timestamp
+      const syncTime = new Date().toISOString();
+      await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, syncTime);
+      await this.setOfflineEnabled(true);
+
+      this.updateProgress({
+        status: 'completed',
+        currentItem: 'Download complete!',
+        percentage: 100,
+      });
+
+      this.isDownloading = false;
+      return {
+        success: true,
+        nodesCount: nodes.length,
+        edgesCount: edges.length,
+        hasMap: !!campusMap,
+        message: 'Map data downloaded. Ready for offline testing!',
+      };
+
+    } catch (error) {
+      console.error('Metadata download failed:', error);
+      this.updateProgress({
+        status: 'error',
+        error: error.message || 'Download failed',
+      });
+      this.isDownloading = false;
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Download a specific image on-demand
+   * Returns the local path if successful, null otherwise
+   */
+  async downloadImageOnDemand(imageUrl, nodeId) {
+    if (!imageUrl || !nodeId) {
+      console.warn('Missing imageUrl or nodeId for on-demand download');
+      return null;
+    }
+
+    try {
+      const localFile = this.getLocal360ImagePath(nodeId);
+      
+      // Check if already cached
+      if (localFile.exists) {
+        console.log(`📦 Image already cached for node ${nodeId}`);
+        return localFile.uri;
+      }
+
+      console.log(`⬇️ Downloading image on-demand for node ${nodeId}...`);
+      const filename = `node_${nodeId}.jpg`;
+      const success = await this.downloadImage(imageUrl, filename);
+      
+      if (success) {
+        console.log(`✅ On-demand download successful for node ${nodeId}`);
+        return localFile.uri;
+      } else {
+        console.error(`❌ On-demand download failed for node ${nodeId}`);
+        return null;
+      }
+    } catch (error) {
+      console.error(`Error downloading image on-demand for node ${nodeId}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Download images for a list of nodes (e.g., path nodes)
+   * Returns a map of nodeId -> local URI
+   */
+  async downloadPathImages(pathNodes) {
+    const imageMap = {};
+    
+    for (const node of pathNodes) {
+      const imageUrl = node.image360_url || node.image360;
+      if (imageUrl) {
+        const localUri = await this.downloadImageOnDemand(imageUrl, node.node_id);
+        if (localUri) {
+          imageMap[node.node_id] = localUri;
+        }
+      }
+    }
+    
+    return imageMap;
+  }
+
+  /**
    * Download all resources for offline use
    */
   async downloadAllResources(apiService) {
+    console.log('\n=== Download All Resources Called ===');
+    console.log('Current download status:', this.isDownloading);
+    
     if (this.isDownloading) {
-      console.log('Download already in progress');
+      console.log('⚠️ Download already in progress');
       return { success: false, error: 'Download already in progress' };
     }
 
