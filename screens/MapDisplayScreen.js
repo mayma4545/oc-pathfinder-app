@@ -20,11 +20,13 @@ import { Image as ExpoImage } from 'expo-image';
 import { THEME_COLORS } from '../config';
 import ApiService from '../services/ApiService';
 import { getOptimizedImageUrl } from '../utils/ImageOptimizer';
+import OfflineService from '../services/OfflineService';
+import OfflineModeBadge, { OfflineInfoCard } from '../components/OfflineModeBadge';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const MapDisplayScreen = ({ route, navigation }) => {
-  const { startNode, endNode, imageQuality = 'hd' } = route.params;
+  const { startNode, endNode, imageQuality = 'hd', isOffline = false } = route.params;
   const [pathData, setPathData] = useState(null);
   const [campusMap, setCampusMap] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -35,6 +37,17 @@ const MapDisplayScreen = ({ route, navigation }) => {
   const [current360Index, setCurrent360Index] = useState(0);
   const [hideUI, setHideUI] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  
+  // Cached image URLs state
+  const [cachedImageUrls, setCachedImageUrls] = useState({});
+  const [current360ImageUrl, setCurrent360ImageUrl] = useState(null);
+  const [campusMapImageUrl, setCampusMapImageUrl] = useState(null);
+  
+  // Offline mode state
+  const [isOfflineMode, setIsOfflineMode] = useState(isOffline);
+  const [isOfflineRoute, setIsOfflineRoute] = useState(false);
+  const [showOfflineInfo, setShowOfflineInfo] = useState(false);
+  const [offlineStats, setOfflineStats] = useState({});
   
   // Map zoom state
   const scale = useRef(new Animated.Value(1)).current;
@@ -62,6 +75,74 @@ const MapDisplayScreen = ({ route, navigation }) => {
   useEffect(() => {
     loadPathAndMap();
   }, []);
+
+  // Load cached image URL when current360Node changes
+  useEffect(() => {
+    const loadCachedUrl = async () => {
+      if (current360Node && current360Node.image360) {
+        const cachedUrl = await getImageUrlWithCache(current360Node);
+        setCurrent360ImageUrl(cachedUrl);
+      }
+    };
+    loadCachedUrl();
+  }, [current360Node?.node_id]);
+
+  // Update campus map URL when quality setting changes
+  useEffect(() => {
+    const updateCampusMapUrl = async () => {
+      if (campusMap && campusMap.image_url) {
+        const cachedMapUrl = await getCampusMapImageUrlWithCache(campusMap.image_url);
+        setCampusMapImageUrl(cachedMapUrl);
+      }
+    };
+    updateCampusMapUrl();
+  }, [campusMap?.image_url, imageQuality]);
+
+  // Helper function to get image URL with offline cache support
+  const getImageUrlWithCache = async (node) => {
+    if (!node || !node.image360) return null;
+    
+    try {
+      // Always check for cached version first (even when online)
+      const cachedUrl = await OfflineService.getImageUrl({
+        node_id: node.node_id,
+        image360_url: node.image360,
+      });
+      
+      // If we have a cached local file, ALWAYS use it (even when online)
+      if (cachedUrl && cachedUrl.startsWith('file://')) {
+        return cachedUrl;
+      }
+      
+      // Only use Cloudinary if no cached version exists
+      return getOptimizedImageUrl(node.image360, imageQuality);
+    } catch (error) {
+      console.error('Error getting cached image URL:', error);
+      return getOptimizedImageUrl(node.image360, imageQuality);
+    }
+  };
+
+  // Helper function to get campus map image URL with cache priority
+  const getCampusMapImageUrlWithCache = async (mapImageUrl) => {
+    if (!mapImageUrl) return null;
+    
+    try {
+      const mapId = campusMap?.id || 'main';
+      // Always check for cached version first (even when online)
+      const cachedUrl = await OfflineService.getCampusMapImageUrl(mapImageUrl, mapId);
+      
+      // If we have a cached local file, ALWAYS use it (even when online)
+      if (cachedUrl && cachedUrl.startsWith('file://')) {
+        return cachedUrl;
+      }
+      
+      // Only use Cloudinary if no cached version exists
+      return getOptimizedImageUrl(mapImageUrl, imageQuality);
+    } catch (error) {
+      console.error('Error getting cached map image URL:', error);
+      return getOptimizedImageUrl(mapImageUrl, imageQuality);
+    }
+  };
 
   // Pan responder for 360° image - seamless loop version
   const panResponder360 = useRef(
@@ -253,24 +334,64 @@ const MapDisplayScreen = ({ route, navigation }) => {
     try {
       setLoading(true);
 
-      // Load path
+      console.log('=== MapDisplayScreen: Loading Path ===');
+      console.log('Start Node:', startNode.node_code);
+      console.log('End Node:', endNode.node_code);
+      console.log('Is Offline Mode:', isOfflineMode);
+
+      // Load path - use offlineOnly if user explicitly chose offline mode
       const pathResponse = await ApiService.findPath(
         startNode.node_code,
-        endNode.node_code
+        endNode.node_code,
+        false,
+        { offlineOnly: isOfflineMode }
       );
 
+      console.log('Path Response:', {
+        success: pathResponse.success,
+        offline: pathResponse.offline,
+        error: pathResponse.error,
+        pathLength: pathResponse.path?.length
+      });
+
       if (!pathResponse.success) {
-        Alert.alert('Error', pathResponse.error || 'Failed to find path');
+        const errorMessage = pathResponse.error || 'Failed to find path';
+        const wasOfflineAttempt = pathResponse.offline || isOfflineMode;
+        
+        let displayMessage = errorMessage;
+        
+        // If it was an offline attempt and data is missing, provide helpful guidance
+        if (wasOfflineAttempt && !pathResponse.hasOfflineData) {
+          displayMessage = errorMessage; // Already includes download instruction
+        }
+        
+        Alert.alert(
+          'Path Finding Error',
+          displayMessage,
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
         navigation.goBack();
         return;
       }
 
       setPathData(pathResponse);
+      
+      // Track if this was an offline route
+      if (pathResponse.offline || isOfflineMode) {
+        setIsOfflineRoute(true);
+        // Get offline stats for the info card
+        const stats = await OfflineService.getOfflineStats();
+        setOfflineStats(stats);
+      }
 
       // Load campus map
       const mapResponse = await ApiService.getCampusMap();
       if (mapResponse.success) {
         setCampusMap(mapResponse.map);
+        
+        // Load cached campus map image URL
+        const cachedMapUrl = await getCampusMapImageUrlWithCache(mapResponse.map.image_url);
+        setCampusMapImageUrl(cachedMapUrl);
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to load path. Please try again.');
@@ -626,6 +747,15 @@ const MapDisplayScreen = ({ route, navigation }) => {
           <View style={styles.placeholder} />
         </View>
 
+        {/* Offline Mode Banner */}
+        {isOfflineMode && (
+          <View style={styles.offlineModeBanner}>
+            <Text style={styles.offlineModeText}>
+              📴 Offline Mode - Using cached data
+            </Text>
+          </View>
+        )}
+
       <ScrollView style={styles.content}>
         {/* Route Info Card */}
         <View style={styles.infoCard}>
@@ -653,8 +783,24 @@ const MapDisplayScreen = ({ route, navigation }) => {
                 <Text style={styles.statValue}>{pathData.num_nodes}</Text>
                 <Text style={styles.statLabel}>Stops</Text>
               </View>
+              {isOfflineRoute && (
+                <OfflineModeBadge 
+                  isOffline={true}
+                  onPress={() => setShowOfflineInfo(true)}
+                  style={{ marginLeft: 10 }}
+                />
+              )}
             </View>
           )}
+          
+          {/* Offline Info Card */}
+          <OfflineInfoCard
+            isVisible={showOfflineInfo}
+            lastSync={offlineStats.lastSync}
+            nodesCount={offlineStats.nodesCount}
+            edgesCount={offlineStats.edgesCount}
+            onDismiss={() => setShowOfflineInfo(false)}
+          />
         </View>
 
         {/* Campus Map with Route */}
@@ -688,7 +834,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
                   {...mapPanResponder.panHandlers}
                 >
                   <Image
-                    source={{ uri: getOptimizedImageUrl(campusMap.image_url, imageQuality) }}
+                    source={{ uri: campusMapImageUrl || campusMap.image_url }}
                     style={styles.mapImage}
                     resizeMode="contain"
                     onLayout={(event) => {
@@ -816,7 +962,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
                   >
                     <ExpoImage
                       key={`360-${current360Node.node_id}-${imageQuality}-1`}
-                      source={{ uri: getOptimizedImageUrl(current360Node.image360, imageQuality) }}
+                      source={{ uri: current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality) }}
                       style={styles.image360Part}
                       contentFit="cover"
                       cachePolicy="memory-disk"
@@ -825,7 +971,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
                     />
                     <ExpoImage
                       key={`360-${current360Node.node_id}-${imageQuality}-2`}
-                      source={{ uri: getOptimizedImageUrl(current360Node.image360, imageQuality) }}
+                      source={{ uri: current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality) }}
                       style={styles.image360Part}
                       contentFit="cover"
                       cachePolicy="memory-disk"
@@ -834,7 +980,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
                     />
                     <ExpoImage
                       key={`360-${current360Node.node_id}-${imageQuality}-3`}
-                      source={{ uri: getOptimizedImageUrl(current360Node.image360, imageQuality) }}
+                      source={{ uri: current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality) }}
                       style={styles.image360Part}
                       contentFit="cover"
                       cachePolicy="memory-disk"
@@ -1096,6 +1242,19 @@ const styles = StyleSheet.create({
   },
   placeholder: {
     width: 50,
+  },
+  offlineModeBanner: {
+    backgroundColor: '#FFF3CD',
+    borderBottomWidth: 2,
+    borderBottomColor: '#FF9800',
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    alignItems: 'center',
+  },
+  offlineModeText: {
+    color: '#856404',
+    fontSize: 13,
+    fontWeight: '600',
   },
   content: {
     flex: 1,

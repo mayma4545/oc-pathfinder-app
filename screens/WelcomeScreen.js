@@ -1,28 +1,90 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Image, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { THEME_COLORS, APP_CONFIG } from '../config';
+import ApiService from '../services/ApiService';
+import OfflineService from '../services/OfflineService';
 
 const WelcomeScreen = ({ navigation }) => {
   const timerRef = useRef(null);
+  const [connectionStatus, setConnectionStatus] = useState({
+    checking: true,
+    connected: false,
+    message: 'Checking server connection...',
+    canContinue: false,
+    offlineAvailable: false,
+  });
 
   useEffect(() => {
-    // Auto-navigate after 3 seconds
-    timerRef.current = setTimeout(() => {
-      navigation.replace('PointSelection');
-    }, 3000);
-
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
-    };
+    checkServerConnection();
   }, [navigation]);
+
+  const checkServerConnection = async () => {
+    try {
+      setConnectionStatus({
+        checking: true,
+        connected: false,
+        message: 'Checking server connection...',
+        canContinue: false,
+        offlineAvailable: false,
+      });
+
+      // Try to fetch nodes to verify server is reachable
+      const response = await Promise.race([
+        ApiService.getNodes(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Connection timeout')), 5000)
+        )
+      ]);
+
+      if (response.success && !response.offline) {
+        // Server is reachable
+        setConnectionStatus({
+          checking: false,
+          connected: true,
+          message: 'Connected to server ✓',
+          canContinue: true,
+          offlineAvailable: false,
+        });
+
+        // Auto-navigate after 2 seconds if connected
+        timerRef.current = setTimeout(() => {
+          navigation.replace('PointSelection');
+        }, 2000);
+      } else {
+        // Offline mode detected
+        await handleOfflineMode();
+      }
+    } catch (error) {
+      console.log('Server connection check failed:', error.message);
+      await handleOfflineMode();
+    }
+  };
+
+  const handleOfflineMode = async () => {
+    // Check if offline data is available
+    const offlineAvailable = await OfflineService.isPathfindingAvailable();
+    
+    setConnectionStatus({
+      checking: false,
+      connected: false,
+      message: offlineAvailable 
+        ? 'Server unavailable - Offline mode available'
+        : 'Server unavailable - No offline data',
+      canContinue: true,
+      offlineAvailable: offlineAvailable,
+    });
+  };
 
   const handleGetStarted = () => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
+    
+    if (!connectionStatus.canContinue) {
+      return;
+    }
+    
     navigation.replace('PointSelection');
   };
 
@@ -57,13 +119,43 @@ const WelcomeScreen = ({ navigation }) => {
           <FeatureItem icon="📷" text="360° Room Views" />
         </View>
 
+        {/* Connection Status */}
+        <View style={styles.connectionStatusContainer}>
+          {connectionStatus.checking ? (
+            <>
+              <ActivityIndicator size="small" color="#FFFFFF" />
+              <Text style={styles.connectionStatusText}>{connectionStatus.message}</Text>
+            </>
+          ) : (
+            <>
+              <Text style={[
+                styles.connectionStatusText,
+                connectionStatus.connected ? styles.connectedText : styles.disconnectedText
+              ]}>
+                {connectionStatus.connected ? '🟢' : connectionStatus.offlineAvailable ? '🟡' : '🔴'} {connectionStatus.message}
+              </Text>
+              {!connectionStatus.connected && !connectionStatus.offlineAvailable && (
+                <Text style={styles.connectionHint}>
+                  Please check your internet connection or contact support
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+
         {/* Get Started Button */}
         <TouchableOpacity
-          style={styles.button}
+          style={[
+            styles.button,
+            (!connectionStatus.canContinue || connectionStatus.checking) && styles.buttonDisabled
+          ]}
           onPress={handleGetStarted}
           activeOpacity={0.8}
+          disabled={!connectionStatus.canContinue || connectionStatus.checking}
         >
-          <Text style={styles.buttonText}>Get Started</Text>
+          <Text style={styles.buttonText}>
+            {connectionStatus.checking ? 'Please Wait...' : 'Get Started'}
+          </Text>
         </TouchableOpacity>
 
         {/* Admin Login Button */}
@@ -182,6 +274,31 @@ const styles = StyleSheet.create({
     bottom: 20,
     color: 'rgba(255, 255, 255, 0.7)',
     fontSize: 12,
+  },
+  connectionStatusContainer: {
+    marginVertical: 20,
+    alignItems: 'center',
+  },
+  connectionStatusText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  connectedText: {
+    fontWeight: '600',
+  },
+  disconnectedText: {
+    fontWeight: '600',
+  },
+  connectionHint: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  buttonDisabled: {
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
   },
 });
 
