@@ -82,6 +82,11 @@ const MapDisplayScreen = ({ route, navigation }) => {
       if (current360Node && current360Node.image360) {
         const cachedUrl = await getImageUrlWithCache(current360Node);
         setCurrent360ImageUrl(cachedUrl);
+        
+        // Trigger predictive caching for neighbors
+        if (OfflineService.predictiveCache) {
+           OfflineService.predictiveCache(current360Node.node_id);
+        }
       }
     };
     loadCachedUrl();
