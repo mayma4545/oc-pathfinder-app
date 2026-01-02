@@ -847,6 +847,66 @@ class OfflineService {
   }
 
   /**
+   * Predictively cache images for nearby nodes
+   * @param {string|number} nodeId - Current node ID
+   */
+  async predictiveCache(nodeId) {
+    try {
+      // 1. Get neighbors
+      const pathfinder = getPathfinder();
+      // Ensure pathfinder is initialized
+      if (!pathfinder.isInitialized()) {
+         // Try to initialize purely from memory if possible, or wait?
+         // Since this is background, we can try to init.
+         // But verifyPathfinding logic suggests we check data first.
+         // Let's assume if we are calling this, we might be online or offline.
+         // If pathfinder isn't ready, we probably can't get neighbors.
+         const initialized = await this.initializePathfinder();
+         if (!initialized) return;
+      }
+
+      // Radius 1 hop
+      const nearbyIds = pathfinder.getNearbyNodeIds(nodeId, 1); 
+      if (!nearbyIds || nearbyIds.length === 0) return;
+
+      console.log(`🔮 Predictive cache triggered for node ${nodeId}, found ${nearbyIds.length} neighbors`);
+
+      // 2. Get node data to access URLs
+      const nodes = await this.getNodes();
+      if (!nodes) return;
+      const nodesMap = new Map(nodes.map(n => [n.node_id, n]));
+
+      // 3. Process each neighbor
+      for (const neighborId of nearbyIds) {
+        // Skip if already cached
+        const isCached = await this.isImageCached(neighborId);
+        if (isCached) {
+          console.log(`  Skipping neighbor ${neighborId}, already cached`);
+          continue;
+        }
+
+        // Get node data
+        const node = nodesMap.get(neighborId);
+        if (!node) continue;
+
+        const imageUrl = node.image360_url || node.image360;
+        if (!imageUrl) continue;
+
+        console.log(`  🔮 Predownloading neighbor ${neighborId}`);
+        
+        // Fire and forget (but handle promise locally)
+        this.downloadImage(imageUrl, `node_${neighborId}.jpg`)
+          .then(success => {
+            if (success) console.log(`  ✅ Predictive download complete: ${neighborId}`);
+          })
+          .catch(err => console.error(`  ❌ Predictive download failed: ${neighborId}`, err));
+      }
+    } catch (error) {
+      console.error('Predictive cache error:', error);
+    }
+  }
+
+  /**
    * Initialize pathfinder with cached data
    * @returns {boolean} True if successfully initialized
    */
