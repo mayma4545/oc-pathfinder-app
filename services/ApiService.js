@@ -61,6 +61,15 @@ const ApiService = {
 
     try {
       const response = await api.get(API_ENDPOINTS.NODES_LIST, { params });
+      
+      // Background sync: Update offline cache if enabled (don't await, run in background)
+      OfflineService.isOfflineEnabled().then(async (enabled) => {
+        if (enabled && response.data.success) {
+          console.log('📥 Background sync: Updating cached nodes...');
+          await OfflineService.saveNodes(response.data.nodes);
+        }
+      }).catch(err => console.warn('Background cache update failed:', err));
+      
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - fallback to offline
@@ -221,19 +230,6 @@ const ApiService = {
       }
 
       // Not a network error, throw the server error
-      throw error.response?.data || error;
-    }
-  },
-
-  /**
-   * Get data version from server to check for updates
-   */
-  getDataVersion: async () => {
-    try {
-      const response = await api.get(API_ENDPOINTS.DATA_VERSION);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to get data version:', error);
       throw error.response?.data || error;
     }
   },

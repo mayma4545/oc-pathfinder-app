@@ -117,10 +117,9 @@ class SyncManager {
   async isAutoSyncEnabled() {
     try {
       const enabled = await AsyncStorage.getItem(SYNC_KEYS.AUTO_SYNC_ENABLED);
-      // Default to FALSE - sync is OFF by default
-      return enabled === 'true';
+      return enabled !== 'false'; // Default to true
     } catch {
-      return false; // Default disabled
+      return true;
     }
   }
 
@@ -163,40 +162,22 @@ class SyncManager {
     this.updateStatus({ status: 'syncing', message: 'Checking for updates...' });
 
     try {
-      // Check if data needs updating using version comparison
-      const versionCheck = await OfflineService.checkIfDataNeedsUpdate(ApiService);
-      
-      if (versionCheck.error) {
-        throw new Error(versionCheck.error);
-      }
-
-      if (!versionCheck.needsUpdate) {
-        this.updateStatus({
-          status: 'success',
-          lastSync: new Date(),
-          hasUpdates: false,
-          message: 'All data is up to date',
-        });
-        this.syncInProgress = false;
-        return { success: true, hasUpdates: false };
-      }
-
-      // Data needs updating - download metadata only
-      console.log('Server has updates:', versionCheck.changes);
-      this.updateStatus({ message: 'Downloading updates...' });
-      
-      const result = await OfflineService.downloadMetadataOnly(ApiService);
+      const result = await OfflineService.checkAndUpdateResources(ApiService);
       
       if (result.success) {
         this.updateStatus({
           status: 'success',
           lastSync: new Date(),
-          hasUpdates: true,
-          message: `Updated: ${result.nodesCount} nodes, ${result.edgesCount} edges (images load on-demand)`,
+          hasUpdates: result.hasUpdates,
+          message: result.hasUpdates 
+            ? `Updated: ${result.newNodes || 0} nodes, ${result.newImages || 0} images`
+            : 'All data is up to date',
         });
 
         // Reset pathfinder if data changed
-        OfflineService.resetPathfinder();
+        if (result.hasUpdates) {
+          OfflineService.resetPathfinder();
+        }
       } else {
         this.updateStatus({
           status: 'error',

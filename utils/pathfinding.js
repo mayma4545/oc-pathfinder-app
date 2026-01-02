@@ -144,6 +144,37 @@ class PathFinder {
   }
 
   /**
+   * Get IDs of nearby nodes within a specified radius (hops)
+   * @param {number} nodeId - Center node ID
+   * @param {number} radius - Number of hops (default 1)
+   * @returns {Array} Array of node IDs
+   */
+  getNearbyNodeIds(nodeId, radius = 1) {
+    if (!this.graph.has(nodeId)) return [];
+
+    const nearbyIds = new Set();
+    const queue = [{ id: nodeId, dist: 0 }];
+    const visited = new Set([nodeId]);
+
+    while (queue.length > 0) {
+      const { id, dist } = queue.shift();
+
+      if (dist >= radius) continue;
+
+      const neighbors = this.graph.get(id) || [];
+      for (const edge of neighbors) {
+        if (!visited.has(edge.to)) {
+          visited.add(edge.to);
+          nearbyIds.add(edge.to);
+          queue.push({ id: edge.to, dist: dist + 1 });
+        }
+      }
+    }
+
+    return Array.from(nearbyIds);
+  }
+
+  /**
    * Heuristic for A*: Estimate distance using floor difference
    * Assumes ~4 meters per floor level
    * @param {number} nodeAId - Source node ID

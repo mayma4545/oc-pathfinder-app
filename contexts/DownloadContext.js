@@ -72,28 +72,13 @@ export const DownloadProvider = ({ children }) => {
 
   const startDownload = useCallback(async () => {
     try {
-      // Use metadata-only download for initial setup
-      const result = await OfflineService.downloadMetadataOnly(ApiService);
-      if (result.success) {
-        await refreshStats();
-      }
-      return result;
-    } catch (error) {
-      console.error('Download failed:', error);
-      return { success: false, error: error.message };
-    }
-  }, [refreshStats]);
-
-  const startFullDownload = useCallback(async () => {
-    try {
-      // Full download with all images
       const result = await OfflineService.downloadAllResources(ApiService);
       if (result.success) {
         await refreshStats();
       }
       return result;
     } catch (error) {
-      console.error('Full download failed:', error);
+      console.error('Download failed:', error);
       return { success: false, error: error.message };
     }
   }, [refreshStats]);
@@ -135,7 +120,6 @@ export const DownloadProvider = ({ children }) => {
     offlineStats,
     isDownloading,
     startDownload,
-    startFullDownload,
     checkForUpdates,
     clearCache,
     cancelDownload,
