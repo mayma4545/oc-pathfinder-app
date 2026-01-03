@@ -85,7 +85,10 @@ const MapDisplayScreen = ({ route, navigation }) => {
         
         // Trigger predictive caching for neighbors
         if (OfflineService.predictiveCache) {
-           OfflineService.predictiveCache(current360Node.node_id);
+           // Defer execution to avoid blocking UI transition
+           setTimeout(() => {
+             OfflineService.predictiveCache(current360Node.node_id);
+           }, 1000);
         }
       }
     };

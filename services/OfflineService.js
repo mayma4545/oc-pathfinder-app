@@ -37,6 +37,7 @@ class OfflineService {
       percentage: 0,
       error: null,
     };
+    this.nodesMemoryCache = null;
   }
 
   /**
@@ -310,6 +311,7 @@ class OfflineService {
    */
   async saveNodes(nodes) {
     try {
+      this.nodesMemoryCache = nodes;
       await AsyncStorage.setItem(STORAGE_KEYS.NODES, JSON.stringify(nodes));
       return true;
     } catch (error) {
@@ -322,9 +324,13 @@ class OfflineService {
    * Get nodes from local storage
    */
   async getNodes() {
+    if (this.nodesMemoryCache) return this.nodesMemoryCache;
+
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.NODES);
-      return data ? JSON.parse(data) : null;
+      const nodes = data ? JSON.parse(data) : null;
+      if (nodes) this.nodesMemoryCache = nodes;
+      return nodes;
     } catch (error) {
       console.error('Failed to get nodes:', error);
       return null;
@@ -706,6 +712,7 @@ class OfflineService {
    */
   async clearCache() {
     try {
+      this.nodesMemoryCache = null;
       // Clear AsyncStorage
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.NODES,
