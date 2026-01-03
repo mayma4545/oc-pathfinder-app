@@ -2,11 +2,12 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL, API_ENDPOINTS } from '../config';
 import OfflineService from './OfflineService';
+import { isNetworkError } from '../utils/networkUtils';
 
 // Create axios instance
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 5000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -42,14 +43,14 @@ api.interceptors.response.use(
 // API Service functions
 const ApiService = {
   // ============= Public APIs =============
-  
+
   /**
    * Get list of all nodes with optional filtering
    * Falls back to offline cache if network unavailable
    */
   getNodes: async (params = {}, options = {}) => {
     const { offlineOnly = false } = options;
-    
+
     // If offline only mode, use cached data
     if (offlineOnly) {
       const offlineNodes = await OfflineService.getNodes();
@@ -61,7 +62,7 @@ const ApiService = {
 
     try {
       const response = await api.get(API_ENDPOINTS.NODES_LIST, { params });
-      
+
       // Background sync: Update offline cache if enabled (don't await, run in background)
       OfflineService.isOfflineEnabled().then(async (enabled) => {
         if (enabled && response.data.success) {
@@ -69,15 +70,15 @@ const ApiService = {
           await OfflineService.saveNodes(response.data.nodes);
         }
       }).catch(err => console.warn('Background cache update failed:', err));
-      
+
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - fallback to offline
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         console.log('Network unavailable, using cached nodes');
         const offlineNodes = await OfflineService.getNodes();
@@ -111,11 +112,11 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - extract buildings from cached nodes
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         const offlineNodes = await OfflineService.getNodes();
         if (offlineNodes && offlineNodes.length > 0) {
@@ -139,11 +140,11 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - fallback to offline
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         const offlineMap = await OfflineService.getCampusMap();
         if (offlineMap) {
@@ -175,9 +176,9 @@ const ApiService = {
     if (offlineOnly || preferOffline) {
       console.log('Using offline pathfinding...');
       const offlineResult = await OfflineService.findPath(startCode, goalCode, avoidStairs);
-      
+
       console.log('Offline result:', { success: offlineResult.success, error: offlineResult.error });
-      
+
       // If offline only or offline succeeded, return the result
       if (offlineOnly || offlineResult.success) {
         return offlineResult;
@@ -196,31 +197,31 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error') ||
-                             error.message?.includes('timeout');
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error') ||
+        error.message?.includes('timeout');
 
       // If network error, try offline fallback
       if (isNetworkError) {
         console.log('Network unavailable, attempting offline pathfinding...');
         const offlineResult = await OfflineService.findPath(startCode, goalCode, avoidStairs);
-        
+
         if (offlineResult.success) {
           console.log('Offline pathfinding succeeded');
           return offlineResult;
         }
-        
+
         // Both server and offline failed - provide helpful error message
         console.error('Offline pathfinding failed:', offlineResult.error);
-        
+
         // Check if offline data exists
         const hasOfflineData = await OfflineService.isOfflineEnabled();
-        const errorMessage = hasOfflineData 
+        const errorMessage = hasOfflineData
           ? `No path found between the specified nodes. ${offlineResult.error || ''}`
           : 'No internet connection and no offline data available. Please connect to the internet or download offline maps from Settings > Offline Mode.';
-        
+
         return {
           success: false,
           error: errorMessage,
@@ -244,11 +245,11 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - fallback to offline
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         console.log('Network unavailable, using cached edges');
         const offlineEdges = await OfflineService.getEdges();
@@ -284,7 +285,7 @@ const ApiService = {
         username,
         password,
       });
-      
+
       if (response.data.success) {
         // Store auth token
         if (response.data.token) {
@@ -294,7 +295,7 @@ const ApiService = {
         await AsyncStorage.setItem('user', JSON.stringify(response.data.user));
         await AsyncStorage.setItem('isAdmin', 'true');
       }
-      
+
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
