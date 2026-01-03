@@ -71,3 +71,44 @@ describe('OfflineService - Predictive Cache', () => {
     expect(OfflineService.downloadImage).not.toHaveBeenCalled();
   });
 });
+
+describe('OfflineService - Memory Caching', () => {
+  const AsyncStorage = require('@react-native-async-storage/async-storage');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Clear internal cache manually since it's a singleton
+    OfflineService.edgesMemoryCache = null;
+  });
+
+  test('getEdges should use memory cache on second call', async () => {
+    const mockEdges = [{ edge_id: 1, from: 1, to: 2 }];
+    AsyncStorage.getItem.mockResolvedValue(JSON.stringify(mockEdges));
+
+    // First call - should hit AsyncStorage
+    const edges1 = await OfflineService.getEdges();
+    expect(edges1).toEqual(mockEdges);
+    expect(AsyncStorage.getItem).toHaveBeenCalledWith('@offline_edges');
+
+    // Second call - should use memory cache
+    const edges2 = await OfflineService.getEdges();
+    expect(edges2).toEqual(mockEdges);
+    // Call count should remain 1 because memory cache was hit
+    expect(AsyncStorage.getItem).toHaveBeenCalledTimes(1);
+  });
+  
+  test('saveEdges should update memory cache', async () => {
+    const newEdges = [{ edge_id: 2, from: 2, to: 3 }];
+    
+    await OfflineService.saveEdges(newEdges);
+    
+    // Memory cache should be updated
+    expect(OfflineService.edgesMemoryCache).toEqual(newEdges);
+    
+    // getEdges should return new edges without hitting AsyncStorage
+    AsyncStorage.getItem.mockClear();
+    const edges = await OfflineService.getEdges();
+    expect(edges).toEqual(newEdges);
+    expect(AsyncStorage.getItem).not.toHaveBeenCalled();
+  });
+});

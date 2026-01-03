@@ -38,6 +38,7 @@ class OfflineService {
       error: null,
     };
     this.nodesMemoryCache = null;
+    this.edgesMemoryCache = null;
   }
 
   /**
@@ -342,6 +343,7 @@ class OfflineService {
    */
   async saveEdges(edges) {
     try {
+      this.edgesMemoryCache = edges;
       await AsyncStorage.setItem(STORAGE_KEYS.EDGES, JSON.stringify(edges));
       return true;
     } catch (error) {
@@ -354,9 +356,12 @@ class OfflineService {
    * Get edges from local storage
    */
   async getEdges() {
+    if (this.edgesMemoryCache) return this.edgesMemoryCache;
+
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.EDGES);
       const edges = data ? JSON.parse(data) : null;
+      if (edges) this.edgesMemoryCache = edges;
       console.log('Retrieved edges from storage, count:', edges?.length || 0);
       return edges;
     } catch (error) {
@@ -713,6 +718,7 @@ class OfflineService {
   async clearCache() {
     try {
       this.nodesMemoryCache = null;
+      this.edgesMemoryCache = null;
       // Clear AsyncStorage
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.NODES,
