@@ -15,7 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
-import { THEME_COLORS, MAP_CALIBRATION } from '../../config';
+import { THEME_COLORS, MAP_CALIBRATION, MAP_ASSETS } from '../../config';
 import ApiService from '../../services/ApiService';
 import SvgMap from '../../components/SvgMap';
 import { transformCoordinate } from '../../utils/MapCoordinateUtils';
@@ -36,7 +36,7 @@ const MapOverviewScreen = ({ navigation }) => {
   // Calibration state
   const [showCalibration, setShowCalibration] = useState(false);
   const [calibrationConfig, setCalibrationConfig] = useState(
-    { ...MAP_CALIBRATION['Mahogany_building.svg'], dotSize: 8 } || { scale: 1, offsetX: 0, offsetY: 0, dotSize: 8 }
+    { ...MAP_CALIBRATION[MAP_ASSETS.DEFAULT_CAMPUS_MAP], dotSize: 8 } || { scale: 1, offsetX: 0, offsetY: 0, dotSize: 8 }
   );
 
   // Gesture state
@@ -609,7 +609,7 @@ const MapOverviewScreen = ({ navigation }) => {
           onUpdate={setCalibrationConfig}
           onSave={() => {
             console.log('=== FINAL CALIBRATION VALUES ===');
-            console.log('SVG:', 'Mahogany_building.svg');
+            console.log('SVG:', MAP_ASSETS.DEFAULT_CAMPUS_MAP);
             console.log('Dot Size:', calibrationConfig.dotSize);
             console.log('===============================');
             alert('Dot size printed to console.');
