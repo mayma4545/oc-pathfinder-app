@@ -1,21 +1,32 @@
 import React from 'react';
-import renderer from 'react-test-renderer';
+import { render } from '@testing-library/react-native';
 import SvgMap from '../SvgMap';
-import { View } from 'react-native';
 
-// Mock the svg asset import
-jest.mock('../../assets/Mahogany building.svg', () => 'SvgMock');
+// Mock the config
+jest.mock('../../config', () => ({
+  MAP_ASSETS: {
+    DEFAULT_CAMPUS_MAP: 'Mahogany_building.svg',
+  },
+}));
 
-describe('SvgMap', () => {
-  it('renders correctly', () => {
-    const tree = renderer.create(
-      <SvgMap>
-        <View testID="child-view" />
-      </SvgMap>
-    ).toJSON();
-    
-    expect(tree).toBeDefined();
-    // We can't easily check for SvgMock existence in JSON without a more complex setup, 
-    // but ensuring it renders without crashing is a good start.
+// Mock the SVG component
+jest.mock('../../assets/Mahogany_building.svg', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: (props) => <View {...props} testID="mahogany-svg" />,
+  };
+});
+
+describe('SvgMap Component', () => {
+  it('renders correctly with default map', () => {
+    const { getByTestId } = render(<SvgMap />);
+    expect(getByTestId('mahogany-svg')).toBeTruthy();
+  });
+
+  it('renders error message for invalid map', () => {
+    const { getByText } = render(<SvgMap mapName="invalid.svg" />);
+    expect(getByText(/SVG Load Error: invalid.svg/)).toBeTruthy();
   });
 });
