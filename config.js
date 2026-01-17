@@ -58,5 +58,6 @@ export const MAP_CALIBRATION = {
     scale: 1.0, // Initial scale
     offsetX: 0, // Initial X offset
     offsetY: 0, // Initial Y offset
+    dotSize: 8, // Base dot size
   }
 };

@@ -480,12 +480,14 @@ const MapOverviewScreen = ({ navigation }) => {
         <TouchableOpacity onPress={loadData}>
           <Text style={styles.refreshButton}>↻</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          onPress={() => setShowCalibration(!showCalibration)}
-          style={{ marginLeft: 15 }}
-        >
-          <Text style={{ fontSize: 24 }}>{showCalibration ? '🛠️' : '🔧'}</Text>
-        </TouchableOpacity>
+        {__DEV__ && (
+          <TouchableOpacity 
+            onPress={() => setShowCalibration(!showCalibration)}
+            style={{ marginLeft: 15 }}
+          >
+            <Text style={{ fontSize: 24 }}>{showCalibration ? '🛠️' : '🔧'}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Stats Bar */}
