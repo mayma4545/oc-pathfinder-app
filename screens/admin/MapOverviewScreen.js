@@ -15,8 +15,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
-import { THEME_COLORS } from '../../config';
+import { THEME_COLORS, MAP_CALIBRATION } from '../../config';
 import ApiService from '../../services/ApiService';
+import SvgMap from '../../components/SvgMap';
+import { transformCoordinate } from '../../utils/MapCoordinateUtils';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -192,9 +194,18 @@ const MapOverviewScreen = ({ navigation }) => {
   const renderMapOverlay = () => {
     if (!mapDimensions.width) return null;
 
-    const nodesWithPosition = nodes.filter(
-      (n) => n.map_x !== null && n.map_y !== null
-    );
+    const calibration = MAP_CALIBRATION['Mahogany building.svg'] || { scale: 1, offsetX: 0, offsetY: 0 };
+
+    const nodesWithPosition = nodes
+      .filter((n) => n.map_x !== null && n.map_y !== null)
+      .map((node) => {
+        const transformed = transformCoordinate({ x: node.map_x, y: node.map_y }, calibration);
+        return {
+          ...node,
+          x: (transformed.x / 100) * mapDimensions.width,
+          y: (transformed.y / 100) * mapDimensions.height,
+        };
+      });
 
     // Calculate dot size that gets smaller as zoom increases
     const baseDotSize = 8;
@@ -219,10 +230,10 @@ const MapOverviewScreen = ({ navigation }) => {
           
           if (!fromNode || !toNode) return null;
           
-          const x1 = (fromNode.map_x / 100) * mapDimensions.width;
-          const y1 = (fromNode.map_y / 100) * mapDimensions.height;
-          const x2 = (toNode.map_x / 100) * mapDimensions.width;
-          const y2 = (toNode.map_y / 100) * mapDimensions.height;
+          const x1 = fromNode.x;
+          const y1 = fromNode.y;
+          const x2 = toNode.x;
+          const y2 = toNode.y;
           
           return (
             <Line
@@ -239,8 +250,8 @@ const MapOverviewScreen = ({ navigation }) => {
 
         {/* Draw nodes */}
         {nodesWithPosition.map((node, index) => {
-          const x = (node.map_x / 100) * mapDimensions.width;
-          const y = (node.map_y / 100) * mapDimensions.height;
+          const x = node.x;
+          const y = node.y;
           const color = getNodeColor(node);
           const isSelected = selectedNode?.node_id === node.node_id;
 
@@ -552,10 +563,9 @@ const MapOverviewScreen = ({ navigation }) => {
                     },
                   ]}
                 >
-                  <Image
-                    source={{ uri: campusMap.image_url }}
-                    style={styles.mapImage}
-                    resizeMode="contain"
+                  <SvgMap
+                    width={mapDimensions.width || SCREEN_WIDTH}
+                    height={mapDimensions.height || SCREEN_WIDTH}
                     onLayout={(e) => {
                       const { width, height } = e.nativeEvent.layout;
                       setMapDimensions({ width, height });
@@ -706,10 +716,6 @@ const styles = StyleSheet.create({
   },
   mapContainer: {
     position: 'relative',
-  },
-  mapImage: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_WIDTH,
   },
   loadingContainer: {
     flex: 1,

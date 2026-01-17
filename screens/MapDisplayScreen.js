@@ -17,11 +17,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, State } from 'react-native-gesture-handler';
 import Svg, { Line, Circle, Polyline } from 'react-native-svg';
 import { Image as ExpoImage } from 'expo-image';
-import { THEME_COLORS } from '../config';
+import { THEME_COLORS, MAP_CALIBRATION } from '../config';
 import ApiService from '../services/ApiService';
 import { getOptimizedImageUrl } from '../utils/ImageOptimizer';
 import OfflineService from '../services/OfflineService';
 import OfflineModeBadge, { OfflineInfoCard } from '../components/OfflineModeBadge';
+import SvgMap from '../components/SvgMap';
+import { transformCoordinate } from '../utils/MapCoordinateUtils';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -656,13 +658,22 @@ const MapDisplayScreen = ({ route, navigation }) => {
   const renderPathOverlay = () => {
     if (!pathData || !pathData.path || !mapDimensions.width) return null;
 
+    const calibration = MAP_CALIBRATION['Mahogany building.svg'] || { scale: 1, offsetX: 0, offsetY: 0 };
+
     const points = pathData.path
       .filter((node) => node.map_x !== null && node.map_y !== null)
-      .map((node) => ({
-        x: (node.map_x / 100) * mapDimensions.width,
-        y: (node.map_y / 100) * mapDimensions.height,
-        ...node,
-      }));
+      .map((node) => {
+        // First get relative point (0-100 range)
+        const point = { x: node.map_x, y: node.map_y };
+        // Apply calibration scaling/offset
+        const transformed = transformCoordinate(point, calibration);
+        // Map to screen dimensions
+        return {
+          x: (transformed.x / 100) * mapDimensions.width,
+          y: (transformed.y / 100) * mapDimensions.height,
+          ...node,
+        };
+      });
 
     if (points.length === 0) return null;
 
@@ -850,10 +861,9 @@ const MapDisplayScreen = ({ route, navigation }) => {
                   ]}
                   {...mapPanResponder.panHandlers}
                 >
-                  <Image
-                    source={{ uri: campusMapImageUrl || campusMap.image_url }}
-                    style={styles.mapImage}
-                    resizeMode="contain"
+                  <SvgMap
+                    width={mapDimensions.width || SCREEN_WIDTH - 60}
+                    height={mapDimensions.height || SCREEN_HEIGHT * 0.5}
                     onLayout={(event) => {
                       const { width, height } = event.nativeEvent.layout;
                       setMapDimensions({ width, height });
@@ -1385,10 +1395,6 @@ const styles = StyleSheet.create({
   },
   mapWrapper: {
     position: 'relative',
-  },
-  mapImage: {
-    width: SCREEN_HEIGHT * 0.5,
-    height: SCREEN_HEIGHT * 0.5,
   },
   legend: {
     flexDirection: 'row',

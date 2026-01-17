@@ -3,10 +3,10 @@
 
 // IMPORTANT: Replace YOUR_IP with your actual local IP address
 // To find your IP: Run 'ipconfig' on Windows and look for IPv4 Address
-// export const API_BASE_URL = 'http://192.168.0.8:3000'; // For physical device (Expo Go)
+export const API_BASE_URL = 'http://192.168.1.5:3000'; // For physical device (Expo Go)
 // export const API_BASE_URL = 'https://schizocarpic-tanya-precorrectly.ngrok-free.dev'; // For Android emulator
 // export const API_BASE_URL = 'https://prorestoration-enrico-worrisome.ngrok-free.dev'; // For Android emulator
-export const API_BASE_URL = 'https://express-path-api.onrender.com'; // For production
+// export const API_BASE_URL = 'https://express-path-api.onrender.com'; // For production
 // export const API_BASE_URL = 'http://localhost:8000'; // For iOS simulator
 // export const API_BASE_URL = 'http://localhost:3000'; // For iOS simulator
 // console.log("hi")
@@ -19,7 +19,7 @@ export const API_ENDPOINTS = {
   FIND_PATH: '/api/mobile/find-path/',
   EDGES_LIST: '/api/mobile/edges/',
   ANNOTATIONS_LIST: '/api/mobile/annotations/',
-  
+
   // Admin endpoints
   ADMIN_LOGIN: '/api/mobile/admin/login/',
   NODE_CREATE: '/api/mobile/admin/nodes/create/',
@@ -50,4 +50,13 @@ export const APP_CONFIG = {
   APP_NAME: 'OC Pathfinder',
   VERSION: '1.0.0',
   ADMIN_SECRET_TAPS: 5, // Number of taps to reveal admin login
+};
+
+// Map calibration for SVG assets
+export const MAP_CALIBRATION = {
+  'Mahogany building.svg': {
+    scale: 1.0, // Initial scale
+    offsetX: 0, // Initial X offset
+    offsetY: 0, // Initial Y offset
+  }
 };
