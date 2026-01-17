@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, State } from 'react-native-gesture-handler';
 import Svg, { Line, Circle, Polyline } from 'react-native-svg';
 import { Image as ExpoImage } from 'expo-image';
-import { THEME_COLORS, MAP_CALIBRATION } from '../config';
+import { THEME_COLORS, MAP_CALIBRATION, MAP_ASSETS } from '../config';
 import ApiService from '../services/ApiService';
 import { getOptimizedImageUrl } from '../utils/ImageOptimizer';
 import OfflineService from '../services/OfflineService';
@@ -658,7 +658,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
   const renderPathOverlay = () => {
     if (!pathData || !pathData.path || !mapDimensions.width) return null;
 
-    const calibration = MAP_CALIBRATION['Mahogany building.svg'] || { scale: 1, offsetX: 0, offsetY: 0 };
+    const calibration = MAP_CALIBRATION[MAP_ASSETS.DEFAULT_CAMPUS_MAP] || { scale: 1, offsetX: 0, offsetY: 0 };
 
     const points = pathData.path
       .filter((node) => node.map_x !== null && node.map_y !== null)
