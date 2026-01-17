@@ -1,7 +1,6 @@
 module.exports = {
-  testEnvironment: 'node',
-  transform: {
-    '^.+\.jsx?$': 'babel-jest',
-  },
+  preset: 'jest-expo',
+  moduleNameMapper: {
+    "\.svg": "<rootDir>/__mocks__/svgMock.js"
+  }
 };
-
