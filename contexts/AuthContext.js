@@ -17,11 +17,14 @@ export const AuthProvider = ({ children }) => {
     try {
       const storedUser = await AsyncStorage.getItem('user');
       const adminStatus = await AsyncStorage.getItem('isAdmin');
+      const token = await AsyncStorage.getItem('authToken');
       
-      if (storedUser && adminStatus === 'true') {
+      if (storedUser && adminStatus === 'true' && token) {
         setUser(JSON.parse(storedUser));
         setIsAdmin(true);
       } else {
+        // Inconsistent state or no session
+        await AsyncStorage.multiRemove(['user', 'isAdmin', 'authToken']);
         setUser(null);
         setIsAdmin(false);
       }
