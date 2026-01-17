@@ -19,6 +19,7 @@ import { THEME_COLORS, MAP_CALIBRATION } from '../../config';
 import ApiService from '../../services/ApiService';
 import SvgMap from '../../components/SvgMap';
 import { transformCoordinate } from '../../utils/MapCoordinateUtils';
+import CalibrationOverlay from '../../components/CalibrationOverlay';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -31,6 +32,12 @@ const MapOverviewScreen = ({ navigation }) => {
   const [selectedNode, setSelectedNode] = useState(null);
   const [showNodeModal, setShowNodeModal] = useState(false);
   const [nodeNeighbors, setNodeNeighbors] = useState([]);
+
+  // Calibration state
+  const [showCalibration, setShowCalibration] = useState(false);
+  const [calibrationConfig, setCalibrationConfig] = useState(
+    { ...MAP_CALIBRATION['Mahogany_building.svg'], dotSize: 8 } || { scale: 1, offsetX: 0, offsetY: 0, dotSize: 8 }
+  );
 
   // Gesture state
   const [currentZoom, setCurrentZoom] = useState(1);
@@ -194,12 +201,10 @@ const MapOverviewScreen = ({ navigation }) => {
   const renderMapOverlay = () => {
     if (!mapDimensions.width) return null;
 
-    const calibration = MAP_CALIBRATION['Mahogany building.svg'] || { scale: 1, offsetX: 0, offsetY: 0 };
-
     const nodesWithPosition = nodes
       .filter((n) => n.map_x !== null && n.map_y !== null)
       .map((node) => {
-        const transformed = transformCoordinate({ x: node.map_x, y: node.map_y }, calibration);
+        const transformed = transformCoordinate({ x: node.map_x, y: node.map_y }, calibrationConfig);
         return {
           ...node,
           x: (transformed.x / 100) * mapDimensions.width,
@@ -208,7 +213,7 @@ const MapOverviewScreen = ({ navigation }) => {
       });
 
     // Calculate dot size that gets smaller as zoom increases
-    const baseDotSize = 8;
+    const baseDotSize = calibrationConfig.dotSize || 8;
     const dotSize = Math.max(3, baseDotSize / Math.sqrt(currentZoom));
     const strokeWidth = Math.max(0.5, 2 / currentZoom);
     const glowRadius = Math.max(2, 4 / currentZoom);
@@ -216,6 +221,7 @@ const MapOverviewScreen = ({ navigation }) => {
 
     return (
       <Svg
+        key={`map-overlay-${calibrationConfig.dotSize || 8}`}
         style={StyleSheet.absoluteFill}
         width={mapDimensions.width}
         height={mapDimensions.height}
@@ -474,6 +480,12 @@ const MapOverviewScreen = ({ navigation }) => {
         <TouchableOpacity onPress={loadData}>
           <Text style={styles.refreshButton}>↻</Text>
         </TouchableOpacity>
+        <TouchableOpacity 
+          onPress={() => setShowCalibration(!showCalibration)}
+          style={{ marginLeft: 15 }}
+        >
+          <Text style={{ fontSize: 24 }}>{showCalibration ? '🛠️' : '🔧'}</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Stats Bar */}
@@ -587,6 +599,22 @@ const MapOverviewScreen = ({ navigation }) => {
 
       {/* Node Detail Modal */}
       {renderNodeModal()}
+
+      {/* Calibration Tool */}
+      {showCalibration && (
+        <CalibrationOverlay
+          config={calibrationConfig}
+          onUpdate={setCalibrationConfig}
+          onSave={() => {
+            console.log('=== FINAL CALIBRATION VALUES ===');
+            console.log('SVG:', 'Mahogany_building.svg');
+            console.log('Dot Size:', calibrationConfig.dotSize);
+            console.log('===============================');
+            alert('Dot size printed to console.');
+          }}
+          onClose={() => setShowCalibration(false)}
+        />
+      )}
     </SafeAreaView>
   );
 };

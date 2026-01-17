@@ -54,7 +54,7 @@ export const APP_CONFIG = {
 
 // Map calibration for SVG assets
 export const MAP_CALIBRATION = {
-  'Mahogany building.svg': {
+  'Mahogany_building.svg': {
     scale: 1.0, // Initial scale
     offsetX: 0, // Initial X offset
     offsetY: 0, // Initial Y offset
