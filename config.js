@@ -52,6 +52,11 @@ export const APP_CONFIG = {
   ADMIN_SECRET_TAPS: 5, // Number of taps to reveal admin login
 };
 
+// Map assets
+export const MAP_ASSETS = {
+  DEFAULT_CAMPUS_MAP: 'Mahogany_building.svg',
+};
+
 // Map calibration for SVG assets
 export const MAP_CALIBRATION = {
   'Mahogany_building.svg': {
