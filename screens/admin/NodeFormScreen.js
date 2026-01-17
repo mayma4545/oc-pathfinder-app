@@ -14,8 +14,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { THEME_COLORS } from '../../config';
+import { THEME_COLORS, MAP_ASSETS } from '../../config';
 import ApiService from '../../services/ApiService';
+import SvgMap from '../../components/SvgMap';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -322,7 +323,7 @@ const NodeFormScreen = ({ route, navigation }) => {
 
           {campusMap ? (
             <TouchableOpacity style={styles.openMapButton} onPress={() => setShowMapModal(true)}>
-              <Image source={{ uri: campusMap.image_url }} style={styles.mapThumbnail} resizeMode="cover" />
+              <SvgMap width={SCREEN_WIDTH - 70} height={200} style={styles.mapThumbnail} />
               <View style={styles.openMapOverlay}>
                 <Text style={styles.openMapText}>👆 Tap to Open Map & Set Position</Text>
               </View>
@@ -433,13 +434,9 @@ const NodeFormScreen = ({ route, navigation }) => {
                 style={styles.mapImageContainer}
               >
                 {campusMap && (
-                  <Image
-                    source={{ uri: campusMap.image_url }}
-                    style={[styles.mapImage, { 
-                      width: (SCREEN_WIDTH - 40) * mapZoom, 
-                      height: (SCREEN_WIDTH - 40) * mapZoom 
-                    }]}
-                    resizeMode="contain"
+                  <SvgMap
+                    width={(SCREEN_WIDTH - 40) * mapZoom}
+                    height={(SCREEN_WIDTH - 40) * mapZoom}
                     onLayout={(e) => {
                       const { width, height } = e.nativeEvent.layout;
                       setMapDimensions({ width, height });
