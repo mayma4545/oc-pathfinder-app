@@ -11,6 +11,13 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     checkAuthStatus();
+    
+    // Register callback for session expiry (401 from API)
+    ApiService.setLogoutCallback(() => {
+      setUser(null);
+      setIsAdmin(false);
+      // We can also show an alert here if needed, but the redirect is automatic via state change
+    });
   }, []);
 
   const checkAuthStatus = async () => {

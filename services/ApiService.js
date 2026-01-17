@@ -28,13 +28,17 @@ api.interceptors.request.use(
 );
 
 // Response interceptor for error handling
+let logoutCallback = null;
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
       // Clear token on unauthorized
-      await AsyncStorage.removeItem('authToken');
-      await AsyncStorage.removeItem('user');
+      await AsyncStorage.multiRemove(['authToken', 'user', 'isAdmin']);
+      if (logoutCallback) {
+        logoutCallback();
+      }
     }
     return Promise.reject(error);
   }
@@ -42,6 +46,9 @@ api.interceptors.response.use(
 
 // API Service functions
 const ApiService = {
+  setLogoutCallback: (callback) => {
+    logoutCallback = callback;
+  },
   // ============= Public APIs =============
 
   /**
