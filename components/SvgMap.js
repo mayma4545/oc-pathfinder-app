@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 import { Asset } from 'expo-asset';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import MahoganyMapSource from '../assets/Mahogany_building.svg';
 
 const SvgMap = (props) => {
