@@ -14,6 +14,7 @@ const STORAGE_KEYS = {
   NODES: '@offline_nodes',
   EDGES: '@offline_edges',
   CAMPUS_MAP: '@offline_campus_map',
+  EVENTS: '@offline_events',
   LAST_SYNC: '@offline_last_sync',
   DATA_VERSION: '@offline_data_version',
   OFFLINE_ENABLED: '@offline_enabled',
@@ -39,6 +40,7 @@ class OfflineService {
     };
     this.nodesMemoryCache = null;
     this.edgesMemoryCache = null;
+    this.eventsMemoryCache = null;
   }
 
   /**
@@ -397,6 +399,171 @@ class OfflineService {
   }
 
   /**
+   * Save events to local storage
+   */
+  async saveEvents(events) {
+    try {
+      this.eventsMemoryCache = events;
+      await AsyncStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(events));
+      console.log('Events saved to cache, count:', events?.length || 0);
+      return true;
+    } catch (error) {
+      console.error('Failed to save events:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get events from local storage
+   * Filters to show only active/upcoming events
+   */
+  async getEvents() {
+    if (this.eventsMemoryCache) return this.eventsMemoryCache;
+
+    try {
+      const data = await AsyncStorage.getItem(STORAGE_KEYS.EVENTS);
+      if (!data) return null;
+
+      const events = JSON.parse(data);
+      const now = new Date();
+
+      // Filter to show only active/upcoming events
+      const activeEvents = events.filter(event => {
+        if (!event.end_datetime) return true;
+        return new Date(event.end_datetime) >= now;
+      });
+
+      if (activeEvents) this.eventsMemoryCache = activeEvents;
+      console.log('Retrieved events from storage, count:', activeEvents?.length || 0);
+      return activeEvents;
+    } catch (error) {
+      console.error('Failed to get events:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Combined search for events and nodes (offline)
+   * @param {string} query - Search query
+   * @returns {Object} Object with events and nodes arrays
+   */
+  async combinedSearch(query) {
+    try {
+      if (!query || query.trim() === '') {
+        return { events: [], nodes: [] };
+      }
+
+      const lowerQuery = query.toLowerCase();
+
+      // Search events
+      const cachedEvents = await this.getEvents();
+      const matchedEvents = cachedEvents
+        ? cachedEvents.filter(e =>
+            e.event_name.toLowerCase().includes(lowerQuery)
+          ).slice(0, 10)
+        : [];
+
+      // Search nodes
+      const cachedNodes = await this.getNodes();
+      const matchedNodes = cachedNodes
+        ? cachedNodes.filter(n =>
+            n.name.toLowerCase().includes(lowerQuery) ||
+            n.node_code.toLowerCase().includes(lowerQuery) ||
+            n.building.toLowerCase().includes(lowerQuery)
+          ).slice(0, 10)
+        : [];
+
+      return {
+        events: matchedEvents.map(e => ({ ...e, type: 'event' })),
+        nodes: matchedNodes.map(n => ({ ...n, type: 'node' }))
+      };
+    } catch (error) {
+      console.error('Error in offline combined search:', error);
+      return { events: [], nodes: [] };
+    }
+  }
+
+  /**
+   * Check if any offline data exists
+   * @returns {boolean} True if nodes exist in storage
+   */
+  async hasData() {
+    try {
+      const nodes = await this.getNodes();
+      return !!(nodes && nodes.length > 0);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Download ONLY metadata (nodes and edges) - for fast initial setup
+   */
+  async downloadMetadataOnly(apiService) {
+    if (this.isDownloading) {
+      return { success: false, error: 'Download already in progress' };
+    }
+
+    this.isDownloading = true;
+    await this.initialize();
+
+    try {
+      this.updateProgress({
+        status: 'downloading',
+        totalItems: 4,
+        completedItems: 0,
+        currentItem: 'Fetching metadata...',
+        percentage: 0,
+        error: null,
+      });
+
+      // Fetch metadata
+      this.updateProgress({ currentItem: 'Fetching nodes...' });
+      const nodesResponse = await apiService.getNodes();
+      if (!nodesResponse.success) throw new Error('Failed to fetch nodes');
+      const nodes = nodesResponse.nodes || [];
+
+      this.updateProgress({ currentItem: 'Fetching edges...', completedItems: 1 });
+      const edgesResponse = await apiService.getEdges();
+      if (!edgesResponse.success) throw new Error('Failed to fetch edges');
+      const edges = edgesResponse.edges || [];
+
+      this.updateProgress({ currentItem: 'Saving nodes...', completedItems: 2 });
+      await this.saveNodes(nodes);
+
+      this.updateProgress({ currentItem: 'Saving edges...', completedItems: 3 });
+      await this.saveEdges(edges);
+
+      // Save last sync time
+      const syncTime = new Date().toISOString();
+      await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, syncTime);
+      await this.setOfflineEnabled(true);
+
+      this.updateProgress({
+        status: 'completed',
+        currentItem: 'Metadata downloaded!',
+        percentage: 100,
+        completedItems: 4,
+      });
+
+      this.isDownloading = false;
+      return {
+        success: true,
+        nodesCount: nodes.length,
+        edgesCount: edges.length,
+      };
+    } catch (error) {
+      console.error('Metadata download failed:', error);
+      this.updateProgress({
+        status: 'error',
+        error: error.message || 'Metadata download failed',
+      });
+      this.isDownloading = false;
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
    * Download all resources for offline use
    */
   async downloadAllResources(apiService) {
@@ -449,12 +616,24 @@ class OfflineService {
       const mapResponse = await apiService.getCampusMap();
       const campusMap = mapResponse.success ? mapResponse.map : null;
 
+      this.updateProgress({ currentItem: 'Fetching events...' });
+      let events = [];
+      try {
+        const eventsResponse = await apiService.getEvents();
+        if (eventsResponse.success) {
+          events = eventsResponse.events || [];
+          console.log('Downloaded events count:', events.length);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch events, continuing without them:', error);
+      }
+
       // Calculate total items to download
       const nodesWithImages = nodes.filter(n => n.image360_url || n.image360);
       console.log(`📋 Nodes with images: ${nodesWithImages.length}/${nodes.length}`);
       
-      const totalItems = 3 + nodesWithImages.length + (campusMap?.image_url ? 1 : 0);
-      // 3 = save nodes + save edges + save campus map data
+      const totalItems = 4 + nodesWithImages.length + (campusMap?.image_url ? 1 : 0);
+      // 4 = save nodes + save edges + save campus map data + save events
 
       this.updateProgress({
         totalItems,
@@ -479,7 +658,13 @@ class OfflineService {
         await this.saveCampusMap(campusMap);
       }
 
-      let completedItems = 3;
+      this.updateProgress({ currentItem: 'Saving events data...', completedItems: 4 });
+      if (events.length > 0) {
+        await this.saveEvents(events);
+        console.log('Saved events to storage');
+      }
+
+      let completedItems = 4;
 
       // Step 3: Download campus map image
       if (campusMap?.image_url) {
@@ -719,11 +904,13 @@ class OfflineService {
     try {
       this.nodesMemoryCache = null;
       this.edgesMemoryCache = null;
+      this.eventsMemoryCache = null;
       // Clear AsyncStorage
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.NODES,
         STORAGE_KEYS.EDGES,
         STORAGE_KEYS.CAMPUS_MAP,
+        STORAGE_KEYS.EVENTS,
         STORAGE_KEYS.LAST_SYNC,
         STORAGE_KEYS.DATA_VERSION,
         STORAGE_KEYS.DOWNLOAD_PROGRESS,

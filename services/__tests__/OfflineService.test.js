@@ -112,3 +112,44 @@ describe('OfflineService - Memory Caching', () => {
     expect(AsyncStorage.getItem).not.toHaveBeenCalled();
   });
 });
+
+describe('OfflineService - Metadata Download', () => {
+  const AsyncStorage = require('@react-native-async-storage/async-storage');
+  let mockApiService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockApiService = {
+      getNodes: jest.fn(),
+      getEdges: jest.fn(),
+    };
+  });
+
+  test('downloadMetadataOnly should fetch and save nodes and edges', async () => {
+    const mockNodes = [{ node_id: 1, name: 'Node 1' }];
+    const mockEdges = [{ edge_id: 1, from: 1, to: 2 }];
+    
+    mockApiService.getNodes.mockResolvedValue({ success: true, nodes: mockNodes });
+    mockApiService.getEdges.mockResolvedValue({ success: true, edges: mockEdges });
+    
+    const result = await OfflineService.downloadMetadataOnly(mockApiService);
+    
+    expect(result.success).toBe(true);
+    expect(mockApiService.getNodes).toHaveBeenCalled();
+    expect(mockApiService.getEdges).toHaveBeenCalled();
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith('@offline_nodes', JSON.stringify(mockNodes));
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith('@offline_edges', JSON.stringify(mockEdges));
+  });
+
+  test('hasData should return true if nodes exist', async () => {
+    jest.spyOn(OfflineService, 'getNodes').mockResolvedValue([{ id: 1 }]);
+    const result = await OfflineService.hasData();
+    expect(result).toBe(true);
+  });
+
+  test('hasData should return false if no nodes exist', async () => {
+    jest.spyOn(OfflineService, 'getNodes').mockResolvedValue([]);
+    const result = await OfflineService.hasData();
+    expect(result).toBe(false);
+  });
+});

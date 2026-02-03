@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, ActivityIndicator } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { THEME_COLORS, APP_CONFIG } from '../config';
 import ApiService from '../services/ApiService';
@@ -16,7 +17,22 @@ const WelcomeScreen = ({ navigation }) => {
   });
 
   useEffect(() => {
-    checkServerConnection();
+    const startupCheck = async () => {
+      // Check if we already have data
+      const hasData = await OfflineService.isPathfindingAvailable();
+      const initialDownloadDone = await AsyncStorage.getItem('HAS_INITIAL_DOWNLOAD');
+      
+      if (hasData && initialDownloadDone === 'true') {
+        // Data exists, skip welcome screen
+        navigation.replace('PointSelection');
+        return;
+      }
+      
+      // No data or flag missing, proceed with regular flow
+      checkServerConnection();
+    };
+
+    startupCheck();
   }, [navigation]);
 
   const checkServerConnection = async () => {

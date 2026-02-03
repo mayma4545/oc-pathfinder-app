@@ -83,6 +83,19 @@ export const DownloadProvider = ({ children }) => {
     }
   }, [refreshStats]);
 
+  const startMetadataDownload = useCallback(async () => {
+    try {
+      const result = await OfflineService.downloadMetadataOnly(ApiService);
+      if (result.success) {
+        await refreshStats();
+      }
+      return result;
+    } catch (error) {
+      console.error('Metadata download failed:', error);
+      return { success: false, error: error.message };
+    }
+  }, [refreshStats]);
+
   const checkForUpdates = useCallback(async () => {
     try {
       const result = await OfflineService.checkAndUpdateResources(ApiService);
@@ -120,6 +133,7 @@ export const DownloadProvider = ({ children }) => {
     offlineStats,
     isDownloading,
     startDownload,
+    startMetadataDownload,
     checkForUpdates,
     clearCache,
     cancelDownload,
