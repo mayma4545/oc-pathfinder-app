@@ -15,7 +15,7 @@ const SvgMap = ({ mapName = MAP_ASSETS.DEFAULT_CAMPUS_MAP, ...props }) => {
   }
 
   console.error(`SvgMap: Map "${mapName}" is not a valid component. Is react-native-svg-transformer configured?`);
-  
+
   return (
     <View style={[{ width: props.width, height: props.height, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f0f0f0' }, props.style]}>
       <Text style={{ color: 'red', textAlign: 'center' }}>SVG Load Error: {mapName}</Text>
@@ -23,4 +23,4 @@ const SvgMap = ({ mapName = MAP_ASSETS.DEFAULT_CAMPUS_MAP, ...props }) => {
   );
 };
 
-export default SvgMap;
+export default React.memo(SvgMap);

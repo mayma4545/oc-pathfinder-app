@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -57,6 +57,12 @@ const NodeFormScreen = ({ route, navigation }) => {
     loadCampusMap();
   }, []);
 
+  const handleMapLayout = useCallback((e) => {
+    const { width, height } = e.nativeEvent.layout;
+    setMapDimensions({ width, height });
+    setMapLoading(false);
+  }, []);
+
   const loadCampusMap = async () => {
     try {
       const response = await ApiService.getCampusMap();
@@ -87,15 +93,15 @@ const NodeFormScreen = ({ route, navigation }) => {
 
   const handleMapPress = (event) => {
     const { locationX, locationY } = event.nativeEvent;
-    
+
     // Calculate percentage based on displayed dimensions
     const xPercent = (locationX / mapDimensions.width) * 100;
     const yPercent = (locationY / mapDimensions.height) * 100;
-    
+
     // Clamp values between 0 and 100
     const clampedX = Math.max(0, Math.min(100, xPercent));
     const clampedY = Math.max(0, Math.min(100, yPercent));
-    
+
     setFormData((prev) => ({
       ...prev,
       map_x: clampedX.toFixed(2),
@@ -162,10 +168,10 @@ const NodeFormScreen = ({ route, navigation }) => {
 
   const renderMarkerOnMap = () => {
     if (!formData.map_x || !formData.map_y || !mapDimensions.width) return null;
-    
+
     const x = (parseFloat(formData.map_x) / 100) * mapDimensions.width;
     const y = (parseFloat(formData.map_y) / 100) * mapDimensions.height;
-    
+
     return (
       <View style={[styles.mapMarker, { left: x - 12, top: y - 12 }]}>
         <View style={styles.mapMarkerInner} />
@@ -437,11 +443,7 @@ const NodeFormScreen = ({ route, navigation }) => {
                   <SvgMap
                     width={(SCREEN_WIDTH - 40) * mapZoom}
                     height={(SCREEN_WIDTH - 40) * mapZoom}
-                    onLayout={(e) => {
-                      const { width, height } = e.nativeEvent.layout;
-                      setMapDimensions({ width, height });
-                      setMapLoading(false);
-                    }}
+                    onLayout={handleMapLayout}
                   />
                 )}
                 {!mapLoading && renderMarkerOnMap()}

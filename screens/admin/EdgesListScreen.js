@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { THEME_COLORS } from '../../config';
@@ -16,12 +17,20 @@ import { useFocusEffect } from '@react-navigation/native';
 const EdgesListScreen = ({ navigation }) => {
   const [edges, setEdges] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useFocusEffect(
     useCallback(() => {
       loadEdges();
     }, [])
   );
+
+  const filteredEdges = edges.filter(edge => {
+    const searchLower = searchQuery.toLowerCase();
+    const fromName = edge.from_node?.name?.toLowerCase() || '';
+    const toName = edge.to_node?.name?.toLowerCase() || '';
+    return fromName.includes(searchLower) || toName.includes(searchLower);
+  });
 
   const loadEdges = async () => {
     try {
@@ -109,6 +118,16 @@ const EdgesListScreen = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
+      <View style={styles.searchContainer}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search edges..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          clearButtonMode="while-editing"
+        />
+      </View>
+
       <View style={styles.infoBox}>
         <Text style={styles.infoText}>
           💡 Edges connect nodes and define possible paths. Tap + Add to create
@@ -122,7 +141,7 @@ const EdgesListScreen = ({ navigation }) => {
         </View>
       ) : (
         <FlatList
-          data={edges}
+          data={filteredEdges}
           renderItem={renderEdgeItem}
           keyExtractor={(item) => item.edge_id.toString()}
           contentContainerStyle={styles.listContent}
@@ -170,10 +189,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  searchContainer: {
+    padding: 10,
+    backgroundColor: THEME_COLORS.background,
+  },
+  searchInput: {
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    fontSize: 16,
+  },
   infoBox: {
     backgroundColor: '#E3F2FD',
     padding: 15,
-    margin: 15,
+    marginHorizontal: 15,
+    marginBottom: 10,
     borderRadius: 8,
     borderLeftWidth: 4,
     borderLeftColor: THEME_COLORS.primary,
@@ -185,6 +217,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 15,
+    paddingTop: 5,
   },
   edgeItem: {
     backgroundColor: '#FFFFFF',

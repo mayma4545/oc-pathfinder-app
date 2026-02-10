@@ -439,6 +439,146 @@ const ApiService = {
       throw error.response?.data || error;
     }
   },
+
+  // ============= Event APIs =============
+
+  /**
+   * Get active/upcoming events with optional filtering
+   * Falls back to offline cache if network unavailable
+   */
+  getEvents: async (params = {}, options = {}) => {
+    const { offlineOnly = false } = options;
+
+    // If offline only mode, use cached data
+    if (offlineOnly) {
+      const offlineEvents = await OfflineService.getEvents();
+      if (offlineEvents) {
+        return { success: true, events: offlineEvents, offline: true };
+      }
+      return { success: false, error: 'No offline data available', offline: true };
+    }
+
+    try {
+      const response = await api.get(API_ENDPOINTS.EVENTS_LIST, { params });
+
+      // Background sync: Update offline cache if enabled
+      OfflineService.isOfflineEnabled().then(async (enabled) => {
+        if (enabled && response.data.success) {
+          console.log('📥 Background sync: Updating cached events...');
+          await OfflineService.saveEvents(response.data.events);
+        }
+      }).catch(err => console.warn('Background event cache update failed:', err));
+
+      return { ...response.data, offline: false };
+    } catch (error) {
+      // Check if it's a network error - fallback to offline
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
+      if (isNetworkError) {
+        console.log('Network unavailable, using cached events');
+        const offlineEvents = await OfflineService.getEvents();
+        if (offlineEvents && offlineEvents.length > 0) {
+          return { success: true, events: offlineEvents, offline: true };
+        }
+      }
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Get event details by ID
+   */
+  getEventDetail: async (eventId) => {
+    try {
+      const response = await api.get(`${API_ENDPOINTS.EVENT_DETAIL}${eventId}/`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Combined search for events and nodes
+   * Falls back to offline search if network unavailable
+   */
+  combinedSearch: async (query, options = {}) => {
+    const { offlineOnly = false } = options;
+
+    if (offlineOnly) {
+      const results = await OfflineService.combinedSearch(query);
+      return { success: true, ...results, offline: true };
+    }
+
+    try {
+      const response = await api.get(API_ENDPOINTS.EVENTS_SEARCH, { params: { query } });
+      return { ...response.data, offline: false };
+    } catch (error) {
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
+      if (isNetworkError) {
+        console.log('Network unavailable, using offline combined search');
+        const results = await OfflineService.combinedSearch(query);
+        return { success: true, ...results, offline: true };
+      }
+      throw error.response?.data || error;
+    }
+  },
+
+  // ============= Admin Event CRUD =============
+
+  /**
+   * Get all events (admin only)
+   */
+  getAllEvents: async () => {
+    try {
+      const response = await api.get(API_ENDPOINTS.EVENTS_ALL);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Create new event (admin only)
+   */
+  createEvent: async (eventData) => {
+    try {
+      const response = await api.post(API_ENDPOINTS.EVENT_CREATE, eventData);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Update existing event (admin only)
+   */
+  updateEvent: async (eventId, eventData) => {
+    try {
+      const response = await api.put(`${API_ENDPOINTS.EVENT_UPDATE}${eventId}/update/`, eventData);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Delete event (admin only)
+   */
+  deleteEvent: async (eventId) => {
+    try {
+      const response = await api.delete(`${API_ENDPOINTS.EVENT_DELETE}${eventId}/delete/`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
 };
 
 export default ApiService;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   Modal,
   Animated,
   PanResponder,
+  InteractionManager,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, State } from 'react-native-gesture-handler';
@@ -67,12 +68,18 @@ const MapDisplayScreen = ({ route, navigation }) => {
   const scale360 = useRef(new Animated.Value(1)).current;
   const [baseScale360, setBaseScale360] = useState(1);
   const lastPanX = useRef(0);
-  const [compassAngle, setCompassAngle] = useState(0); // 0 = North
+  const compassAngle = useRef(new Animated.Value(0)).current; // Use Animated.Value to avoid re-renders
+  const compassAngleValue = useRef(0); // Track actual value for calculations
   
   // Transition animation values
   const transitionScale = useRef(new Animated.Value(1)).current;
   const transitionOpacity = useRef(new Animated.Value(1)).current;
   const transitionTranslate = useRef(new Animated.Value(0)).current;
+
+  // Helper function to check if node has 360 image (handles both property names)
+  const hasImage360 = useCallback((node) => {
+    return !!(node && (node.image360 || node.image360_url));
+  }, []);
 
   useEffect(() => {
     loadPathAndMap();
@@ -80,21 +87,25 @@ const MapDisplayScreen = ({ route, navigation }) => {
 
   // Load cached image URL when current360Node changes
   useEffect(() => {
-    const loadCachedUrl = async () => {
-      if (current360Node && current360Node.image360) {
-        const cachedUrl = await getImageUrlWithCache(current360Node);
+    if (!current360Node || !current360Node.image360) return;
+    
+    // Defer image loading until after interactions complete to avoid blocking gestures/animations
+    const task = InteractionManager.runAfterInteractions(() => {
+      getImageUrlWithCache(current360Node).then((cachedUrl) => {
         setCurrent360ImageUrl(cachedUrl);
         
-        // Trigger predictive caching for neighbors
+        // Trigger predictive caching for neighbors (further deferred)
         if (OfflineService.predictiveCache) {
-           // Defer execution to avoid blocking UI transition
-           setTimeout(() => {
-             OfflineService.predictiveCache(current360Node.node_id);
-           }, 1000);
+          setTimeout(() => {
+            OfflineService.predictiveCache(current360Node.node_id);
+          }, 1500);
         }
-      }
-    };
-    loadCachedUrl();
+      }).catch((error) => {
+        console.error('Error loading 360 image:', error);
+      });
+    });
+    
+    return () => task.cancel();
   }, [current360Node?.node_id]);
 
   // Update campus map URL when quality setting changes
@@ -163,8 +174,8 @@ const MapDisplayScreen = ({ route, navigation }) => {
     }
   };
 
-  // Pan responder for 360° image - seamless loop version
-  const panResponder360 = useRef(
+  // Pan responder for 360° image - seamless loop version (OPTIMIZED)
+  const panResponder360 = useMemo(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
@@ -175,25 +186,25 @@ const MapDisplayScreen = ({ route, navigation }) => {
       onPanResponderMove: (_, gestureState) => {
         // Add sensitivity multiplier (4x for faster response)
         const sensitivity = 4;
-        pan360X.setValue(gestureState.dx * sensitivity);
+        const dx = gestureState.dx * sensitivity;
         
-        // Calculate compass angle based on pan
-        // Image aspect ratio is 6656x1104, so width is ~6x height
+        // Update pan animation (runs on native thread - very fast)
+        pan360X.setValue(dx);
+        
+        // Calculate compass angle based on pan (no throttling needed - just updates ref)
         const imageWidth = SCREEN_HEIGHT * 6;
-        const totalOffset = lastPanX.current + (gestureState.dx * sensitivity);
-        
-        // Wrap the offset to create seamless loop
-        // We use middle image, so offset range is -imageWidth to +imageWidth
+        const totalOffset = lastPanX.current + dx;
         let wrappedOffset = totalOffset % imageWidth;
-        
-        // Calculate angle: 0 offset = 0° (North)
         const angle = (-wrappedOffset / imageWidth) * 360;
         let newAngle = angle;
         
         // Normalize to 0-360
         while (newAngle < 0) newAngle += 360;
         while (newAngle >= 360) newAngle -= 360;
-        setCompassAngle(newAngle);
+        
+        // Update Animated.Value and ref (NO setState, NO re-renders)
+        compassAngle.setValue(newAngle);
+        compassAngleValue.current = newAngle;
       },
       onPanResponderRelease: (_, gestureState) => {
         const sensitivity = 4;
@@ -215,7 +226,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
         pan360X.flattenOffset();
       },
     })
-  ).current;
+  , [pan360X]);
 
   // Pinch gesture for 360° image zoom
   const onPinch360Event = Animated.event(
@@ -422,7 +433,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
 
   const handleNodePress = (node) => {
     // If node has 360° image, open 360 view directly
-    if (node.image360) {
+    if (hasImage360(node)) {
       handleView360(node);
     } else {
       // Otherwise show node info
@@ -431,7 +442,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
   };
 
   const handleView360 = (node = null, index = 0) => {
-    const nodesWithImages = pathData?.path?.filter((n) => n.image360) || [];
+    const nodesWithImages = pathData?.path?.filter((n) => hasImage360(n)) || [];
     
     if (nodesWithImages.length === 0) {
       Alert.alert('Not Available', 'No 360° images available for this route');
@@ -461,6 +472,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
       const nextNode = pathData.path[fullPathIndex + 1];
       if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
         initialAngle = nextNode.compass_angle;
+        console.log('🧭 Initial view angle:', initialAngle, '° - Next node:', nextNode.name);
       }
     }
     
@@ -468,7 +480,10 @@ const MapDisplayScreen = ({ route, navigation }) => {
     const imageWidth = SCREEN_HEIGHT * 6;
     const initialOffset = -(initialAngle / 360) * imageWidth;
     
-    setCompassAngle(initialAngle);
+    console.log('📐 Image width:', imageWidth, 'Initial offset:', initialOffset);
+    
+    compassAngle.setValue(initialAngle);
+    compassAngleValue.current = initialAngle;
     pan360X.setValue(initialOffset);
     lastPanX.current = initialOffset;
     scale360.setValue(1);
@@ -479,7 +494,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
   const navigate360 = (direction) => {
     if (isTransitioning) return; // Prevent multiple clicks during transition
     
-    const nodesWithImages = pathData?.path?.filter((n) => n.image360) || [];
+    const nodesWithImages = pathData?.path?.filter((n) => hasImage360(n)) || [];
     let newIndex = current360Index + direction;
     
     if (newIndex < 0) newIndex = nodesWithImages.length - 1;
@@ -528,7 +543,8 @@ const MapDisplayScreen = ({ route, navigation }) => {
       const imageWidth = SCREEN_HEIGHT * 6;
       const initialOffset = -(initialAngle / 360) * imageWidth;
       
-      setCompassAngle(initialAngle);
+      compassAngle.setValue(initialAngle);
+      compassAngleValue.current = initialAngle;
       pan360X.setValue(initialOffset);
       lastPanX.current = initialOffset;
       scale360.setValue(1);
@@ -562,7 +578,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
     });
   };
 
-  const getCompassDirection = (angle) => {
+  const getCompassDirection = useCallback((angle) => {
     if (angle >= 337.5 || angle < 22.5) return 'N';
     if (angle >= 22.5 && angle < 67.5) return 'NE';
     if (angle >= 67.5 && angle < 112.5) return 'E';
@@ -572,14 +588,14 @@ const MapDisplayScreen = ({ route, navigation }) => {
     if (angle >= 247.5 && angle < 292.5) return 'W';
     if (angle >= 292.5 && angle < 337.5) return 'NW';
     return 'N';
-  };
+  }, []);
 
-  // Get direction markers based on path edges
-  const getDirectionMarkers = () => {
+  // Memoize direction markers to avoid recalculation on every render
+  const directionMarkers = useMemo(() => {
     if (!pathData?.path || !current360Node) return [];
     
     const markers = [];
-    const nodesWithImages = pathData.path.filter((n) => n.image360);
+    const nodesWithImages = pathData.path.filter((n) => hasImage360(n));
     const currentIndex = pathData.path.findIndex(n => n.node_id === current360Node.node_id);
     
     // Check if there's a next node (where we need to go)
@@ -622,15 +638,15 @@ const MapDisplayScreen = ({ route, navigation }) => {
     }
     
     return markers;
-  };
+  }, [pathData?.path, current360Node?.node_id, hasImage360]);
 
   // Calculate marker position based on compass angle and current view angle
-  const calculateMarkerPosition = (markerAngle) => {
+  const calculateMarkerPosition = useCallback((markerAngle) => {
     // markerAngle: 0° = North (left edge of image)
     // compassAngle: current view angle (0° = looking at North/left edge)
     
     // Calculate relative angle from current view
-    let relativeAngle = markerAngle - compassAngle;
+    let relativeAngle = markerAngle - compassAngleValue.current;
     
     // Normalize to -180 to 180 range
     while (relativeAngle > 180) relativeAngle -= 360;
@@ -653,7 +669,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
     const normalizedPosition = relativeAngle / halfFOV; // -1 to 1
     
     return { isInView, isAligned, normalizedPosition, relativeAngle };
-  };
+  }, []);
 
   const renderPathOverlay = () => {
     if (!pathData || !pathData.path || !mapDimensions.width) return null;
@@ -709,7 +725,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
         {points.map((point, index) => {
           const isStart = index === 0;
           const isEnd = index === points.length - 1;
-          const has360 = !!point.image360;
+          const has360 = hasImage360(point);
           
           // Determine fill color
           let fillColor = THEME_COLORS.primary;
@@ -912,7 +928,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
         )}
 
         {/* 360 View Button */}
-        {pathData && pathData.path && pathData.path.some(node => node.image360) && (
+        {pathData && pathData.path && pathData.path.some(node => hasImage360(node)) && (
           <TouchableOpacity
             style={styles.view360Button}
             onPress={() => handleView360()}
@@ -930,7 +946,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
             <Text style={styles.nodeInfoDetails}>
               {selectedNode.building} • Floor {selectedNode.floor_level}
             </Text>
-            {selectedNode.image360 && (
+            {hasImage360(selectedNode) && (
               <TouchableOpacity
                 style={styles.view360SmallButton}
                 onPress={() => handleView360(selectedNode)}
@@ -958,129 +974,156 @@ const MapDisplayScreen = ({ route, navigation }) => {
         <View style={styles.modal360Fullscreen}>
           {current360Node && (
             <>
-              {/* 360° Image with Pan Gestures */}
+              {/* 360° Image with Pan Gestures - OPTIMIZED STRUCTURE */}
               <View style={{ flex: 1 }} {...panResponder360.panHandlers}>
+                {/* Optimized: Flattened structure with combined transforms */}
                 <Animated.View
                   style={[
-                    styles.image360Wrapper,
+                    styles.image360Container,
                     {
                       transform: [
-                        { scale: scale360 },
+                        { translateX: pan360X },
+                        { scale: Animated.multiply(scale360, transitionScale) },
+                        { translateY: transitionTranslate },
                       ],
+                      opacity: transitionOpacity,
                     },
                   ]}
                 >
-                  <Animated.View
-                    style={{ flex: 1 }}
-                  >
-                  {/* Triple image for seamless 360° loop with transition effects */}
-                  <Animated.View
-                    style={[
-                      styles.image360Container,
-                      {
-                        transform: [
-                          { translateX: pan360X },
-                          { scale: transitionScale },
-                          { translateY: transitionTranslate },
-                        ],
-                        opacity: transitionOpacity,
-                      },
-                    ]}
-                  >
-                    <ExpoImage
-                      key={`360-${current360Node.node_id}-${imageQuality}-1`}
-                      source={{ uri: current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality) }}
-                      style={styles.image360Part}
-                      contentFit="cover"
-                      cachePolicy="memory-disk"
-                      priority="high"
-                      transition={0}
-                    />
-                    <ExpoImage
-                      key={`360-${current360Node.node_id}-${imageQuality}-2`}
-                      source={{ uri: current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality) }}
-                      style={styles.image360Part}
-                      contentFit="cover"
-                      cachePolicy="memory-disk"
-                      priority="high"
-                      transition={0}
-                    />
-                    <ExpoImage
-                      key={`360-${current360Node.node_id}-${imageQuality}-3`}
-                      source={{ uri: current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality) }}
-                      style={styles.image360Part}
-                      contentFit="cover"
-                      cachePolicy="memory-disk"
-                      priority="high"
-                      transition={0}
-                    />
-                  </Animated.View>
+                  {/* Left copy for seamless wrapping */}
+                  <Image360Part 
+                    nodeId={current360Node.node_id}
+                    imageUrl={current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality)}
+                    quality={imageQuality}
+                    position="left"
+                  />
+                  {/* Center (main) image */}
+                  <Image360Part 
+                    nodeId={current360Node.node_id}
+                    imageUrl={current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality)}
+                    quality={imageQuality}
+                    position="center"
+                  />
+                  {/* Right copy for seamless wrapping */}
+                  <Image360Part 
+                    nodeId={current360Node.node_id}
+                    imageUrl={current360ImageUrl || getOptimizedImageUrl(current360Node.image360, imageQuality)}
+                    quality={imageQuality}
+                    position="right"
+                  />
                 </Animated.View>
-              </Animated.View>
               </View>
 
               {/* Fixed Direction Markers Overlay */}
-              <View style={styles.markersOverlay} pointerEvents="box-none">
-                {getDirectionMarkers().map((marker, index) => {
-                  // Calculate marker position based on compass angle relative to current view
+              <Animated.View 
+                style={[
+                  styles.markersOverlay,
+                  {
+                    transform: [{ translateX: pan360X }]
+                  }
+                ]} 
+                pointerEvents="box-none"
+              >
+                {directionMarkers.map((marker, index) => {
+                  // Calculate marker position based on marker's absolute angle in the 360 image
                   // The 360° image width = SCREEN_HEIGHT * 6 represents full 360°
-                  // The visible screen width (SCREEN_WIDTH) shows a portion of the 360°
                   const imageWidth = SCREEN_HEIGHT * 6;
-                  const degreesPerPixel = 360 / imageWidth;
-                  const visibleDegrees = SCREEN_WIDTH * degreesPerPixel;
                   
-                  // Calculate angle difference from current view center
-                  let angleDiff = marker.angle - compassAngle;
+                  // Calculate marker position based on angle
+                  // When viewing angle 0°, we want the marker at 0° to appear at the CENTER of the screen
+                  // The image left edge (position 0) corresponds to 0°
+                  // When pan360X = 0 (viewing 0°), screen center is at SCREEN_WIDTH/2
+                  // So marker at angle A should be at position: (A / 360) * imageWidth + SCREEN_WIDTH/2
+                  const markerAnglePosition = (marker.angle / 360) * imageWidth;
+                  const markerPositionInImage = markerAnglePosition + SCREEN_WIDTH / 2;
                   
-                  // Normalize to -180 to 180
-                  while (angleDiff > 180) angleDiff -= 360;
-                  while (angleDiff < -180) angleDiff += 360;
-                  
-                  // Convert angle difference to screen position
-                  // Each degree = imageWidth / 360 pixels on the image
-                  // But we need screen position, which is where that part of the image appears
-                  const pixelsPerDegree = imageWidth / 360;
-                  const xOffset = angleDiff * pixelsPerDegree;
-                  
-                  // The marker screen position is center + offset
-                  // But since the image scrolls, the marker appears at screen center when angleDiff is 0
-                  const screenX = (SCREEN_WIDTH / 2) + xOffset;
-                  
-                  // Only show if on screen (with some margin)
-                  const halfVisible = visibleDegrees / 2 + 10;
-                  const isVisible = Math.abs(angleDiff) <= halfVisible;
-                  
-                  if (!isVisible) return null;
+                  // Debug log for first marker
+                  if (index === 0) {
+                    console.log('🎯 Marker:', marker.isNext ? 'FORWARD' : 'BACK', 
+                                'Angle:', marker.angle, 
+                                'AnglePos:', markerAnglePosition.toFixed(0),
+                                'FinalPos:', markerPositionInImage.toFixed(0),
+                                'ScreenCenter:', (SCREEN_WIDTH/2).toFixed(0));
+                  }
                   
                   const markerColor = marker.isNext ? '#4CAF50' : '#FF9800';
                   const markerBgColor = marker.isNext ? 'rgba(76, 175, 80, 0.95)' : 'rgba(255, 152, 0, 0.95)';
                   
+                  // Render marker in all three copies (left, center, right) for seamless wrapping
                   return (
-                    <TouchableOpacity
-                      key={index}
-                      style={[
-                        styles.fixed360Marker,
-                        {
-                          left: screenX - 30, // Center the 60px wide marker
-                        },
-                      ]}
-                      onPress={() => {
-                        if (marker.targetImageIndex >= 0) {
-                          const direction = marker.targetImageIndex > current360Index ? 1 : -1;
-                          navigate360(direction);
-                        }
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <View style={[styles.fixed360MarkerContent, { backgroundColor: markerBgColor }]}>
-                        <Text style={styles.fixed360MarkerArrow}>{marker.isNext ? '▼' : '▲'}</Text>
-                        <Text style={styles.fixed360MarkerLabel}>{marker.isNext ? 'GO' : 'BACK'}</Text>
-                      </View>
-                      <View style={[styles.fixed360MarkerLine, { backgroundColor: markerColor }]} />
-                    </TouchableOpacity>
+                    <React.Fragment key={index}>
+                      {/* Left copy (for wrapping from left edge) */}
+                      <TouchableOpacity
+                        style={[
+                          styles.fixed360Marker,
+                          {
+                            left: markerPositionInImage - imageWidth - 30, // -imageWidth for left copy
+                          },
+                        ]}
+                        onPress={() => {
+                          if (marker.targetImageIndex >= 0) {
+                            const direction = marker.targetImageIndex > current360Index ? 1 : -1;
+                            navigate360(direction);
+                          }
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <View style={[styles.fixed360MarkerContent, { backgroundColor: markerBgColor }]}>
+                          <Text style={styles.fixed360MarkerArrow}>{marker.isNext ? '▼' : '▲'}</Text>
+                          <Text style={styles.fixed360MarkerLabel}>{marker.isNext ? 'GO' : 'BACK'}</Text>
+                        </View>
+                        <View style={[styles.fixed360MarkerLine, { backgroundColor: markerColor }]} />
+                      </TouchableOpacity>
+                      
+                      {/* Center copy (main) */}
+                      <TouchableOpacity
+                        style={[
+                          styles.fixed360Marker,
+                          {
+                            left: markerPositionInImage - 30, // Center the 60px wide marker
+                          },
+                        ]}
+                        onPress={() => {
+                          if (marker.targetImageIndex >= 0) {
+                            const direction = marker.targetImageIndex > current360Index ? 1 : -1;
+                            navigate360(direction);
+                          }
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <View style={[styles.fixed360MarkerContent, { backgroundColor: markerBgColor }]}>
+                          <Text style={styles.fixed360MarkerArrow}>{marker.isNext ? '▼' : '▲'}</Text>
+                          <Text style={styles.fixed360MarkerLabel}>{marker.isNext ? 'GO' : 'BACK'}</Text>
+                        </View>
+                        <View style={[styles.fixed360MarkerLine, { backgroundColor: markerColor }]} />
+                      </TouchableOpacity>
+                      
+                      {/* Right copy (for wrapping from right edge) */}
+                      <TouchableOpacity
+                        style={[
+                          styles.fixed360Marker,
+                          {
+                            left: markerPositionInImage + imageWidth - 30, // +imageWidth for right copy
+                          },
+                        ]}
+                        onPress={() => {
+                          if (marker.targetImageIndex >= 0) {
+                            const direction = marker.targetImageIndex > current360Index ? 1 : -1;
+                            navigate360(direction);
+                          }
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <View style={[styles.fixed360MarkerContent, { backgroundColor: markerBgColor }]}>
+                          <Text style={styles.fixed360MarkerArrow}>{marker.isNext ? '▼' : '▲'}</Text>
+                          <Text style={styles.fixed360MarkerLabel}>{marker.isNext ? 'GO' : 'BACK'}</Text>
+                        </View>
+                        <View style={[styles.fixed360MarkerLine, { backgroundColor: markerColor }]} />
+                      </TouchableOpacity>
+                    </React.Fragment>
                   );
                 })}
-              </View>
+              </Animated.View>
 
               {/* Transition Loading Indicator */}
               {isTransitioning && (
@@ -1115,19 +1158,11 @@ const MapDisplayScreen = ({ route, navigation }) => {
 
               {/* Compass Overlay */}
               {!hideUI && (
-                <View style={styles.compassOverlay} pointerEvents="none">
-                  <View style={styles.compassCircle}>
-                    <Text style={styles.compassDirection}>{getCompassDirection(compassAngle)}</Text>
-                    <Text style={styles.compassAngle}>{Math.round(compassAngle)}°</Text>
-                  </View>
-                  <View style={styles.compassBar}>
-                    <Text style={styles.compassLabel}>W</Text>
-                    <Text style={styles.compassLabel}>N</Text>
-                    <Text style={styles.compassLabel}>E</Text>
-                    <Text style={styles.compassLabel}>S</Text>
-                    <Text style={styles.compassLabel}>W</Text>
-                  </View>
-                </View>
+                <CompassOverlay 
+                  compassAngle={compassAngle}
+                  compassAngleValue={compassAngleValue}
+                  getCompassDirection={getCompassDirection}
+                />
               )}
 
               {/* Navigation Buttons at Bottom */}
@@ -1135,7 +1170,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
                 <View style={styles.navButtonsContainer}>
                   {/* Back Button */}
                   {(() => {
-                    const nodesWithImages = pathData?.path?.filter((n) => n.image360) || [];
+                    const nodesWithImages = pathData?.path?.filter((n) => hasImage360(n)) || [];
                     const canGoBack = current360Index > 0;
                     const prevNode = canGoBack ? nodesWithImages[current360Index - 1] : null;
                     
@@ -1155,13 +1190,13 @@ const MapDisplayScreen = ({ route, navigation }) => {
                   {/* Position Counter */}
                   <View style={styles.navPositionCounter}>
                     <Text style={styles.navPositionText}>
-                      {current360Index + 1} / {(pathData?.path?.filter((n) => n.image360) || []).length}
+                      {current360Index + 1} / {(pathData?.path?.filter((n) => hasImage360(n)) || []).length}
                     </Text>
                   </View>
                   
                   {/* Forward Button */}
                   {(() => {
-                    const nodesWithImages = pathData?.path?.filter((n) => n.image360) || [];
+                    const nodesWithImages = pathData?.path?.filter((n) => hasImage360(n)) || [];
                     const canGoForward = current360Index < nodesWithImages.length - 1;
                     const nextNode = canGoForward ? nodesWithImages[current360Index + 1] : null;
                     
@@ -1848,6 +1883,60 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: 'bold',
   },
+});
+
+// Memoized 360 image component to prevent unnecessary re-renders
+const Image360Part = React.memo(({ nodeId, imageUrl, quality, position }) => {
+  return (
+    <ExpoImage
+      key={`360-${nodeId}-${quality}-${position}`}
+      source={{ uri: imageUrl }}
+      style={styles.image360Part}
+      contentFit="cover"
+      cachePolicy="memory-disk"
+      priority="high"
+      transition={0}
+      recyclingKey={`${nodeId}-${quality}`}
+    />
+  );
+}, (prevProps, nextProps) => {
+  // Only re-render if the actual image URL or node changes
+  return prevProps.imageUrl === nextProps.imageUrl && 
+         prevProps.nodeId === nextProps.nodeId &&
+         prevProps.quality === nextProps.quality;
+});
+
+// Memoized Compass component that doesn't re-render on angle changes
+const CompassOverlay = React.memo(({ compassAngle, compassAngleValue, getCompassDirection }) => {
+  const [displayAngle, setDisplayAngle] = useState(0);
+  const [displayDirection, setDisplayDirection] = useState('N');
+  
+  useEffect(() => {
+    // Update display every 100ms instead of every frame for smooth updates without lag
+    const interval = setInterval(() => {
+      const currentAngle = compassAngleValue.current;
+      setDisplayAngle(Math.round(currentAngle));
+      setDisplayDirection(getCompassDirection(currentAngle));
+    }, 100);
+    
+    return () => clearInterval(interval);
+  }, [compassAngleValue, getCompassDirection]);
+  
+  return (
+    <View style={styles.compassOverlay} pointerEvents="none">
+      <View style={styles.compassCircle}>
+        <Text style={styles.compassDirection}>{displayDirection}</Text>
+        <Text style={styles.compassAngle}>{displayAngle}°</Text>
+      </View>
+      <View style={styles.compassBar}>
+        <Text style={styles.compassLabel}>W</Text>
+        <Text style={styles.compassLabel}>N</Text>
+        <Text style={styles.compassLabel}>E</Text>
+        <Text style={styles.compassLabel}>S</Text>
+        <Text style={styles.compassLabel}>W</Text>
+      </View>
+    </View>
+  );
 });
 
 export default MapDisplayScreen;

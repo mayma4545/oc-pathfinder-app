@@ -3,7 +3,7 @@
 
 // IMPORTANT: Replace YOUR_IP with your actual local IP address
 // To find your IP: Run 'ipconfig' on Windows and look for IPv4 Address
-export const API_BASE_URL = 'http://192.168.1.5:3000'; // For physical device (Expo Go)
+export const API_BASE_URL = 'http://192.168.0.9:3000'; // For physical device (Expo Go)
 // export const API_BASE_URL = 'https://schizocarpic-tanya-precorrectly.ngrok-free.dev'; // For Android emulator
 // export const API_BASE_URL = 'https://prorestoration-enrico-worrisome.ngrok-free.dev'; // For Android emulator
 // export const API_BASE_URL = 'https://express-path-api.onrender.com'; // For production
@@ -19,6 +19,11 @@ export const API_ENDPOINTS = {
   FIND_PATH: '/api/mobile/find-path/',
   EDGES_LIST: '/api/mobile/edges/',
   ANNOTATIONS_LIST: '/api/mobile/annotations/',
+  
+  // Event endpoints
+  EVENTS_LIST: '/api/mobile/events/',
+  EVENT_DETAIL: '/api/mobile/events/',
+  EVENTS_SEARCH: '/api/mobile/events/search/',
 
   // Admin endpoints
   ADMIN_LOGIN: '/api/mobile/admin/login/',
@@ -31,6 +36,12 @@ export const API_ENDPOINTS = {
   ANNOTATION_CREATE: '/api/mobile/admin/annotations/create/',
   ANNOTATION_UPDATE: '/api/mobile/admin/annotations/',
   ANNOTATION_DELETE: '/api/mobile/admin/annotations/',
+  
+  // Admin event endpoints
+  EVENTS_ALL: '/api/mobile/admin/events/all/',
+  EVENT_CREATE: '/api/mobile/admin/events/create/',
+  EVENT_UPDATE: '/api/mobile/admin/events/',
+  EVENT_DELETE: '/api/mobile/admin/events/',
 };
 
 export const THEME_COLORS = {
@@ -51,6 +62,18 @@ export const APP_CONFIG = {
   VERSION: '1.0.0',
   ADMIN_SECRET_TAPS: 5, // Number of taps to reveal admin login
 };
+
+// Event categories
+export const EVENT_CATEGORIES = [
+  'Academic',
+  'Social',
+  'Sports',
+  'Career',
+  'Workshop',
+  'Conference',
+  'Cultural',
+  'Other'
+];
 
 // Map assets
 export const MAP_ASSETS = {

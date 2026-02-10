@@ -22,6 +22,8 @@ import EdgesListScreen from './screens/admin/EdgesListScreen';
 import EdgeFormScreen from './screens/admin/EdgeFormScreen';
 import AnnotationsListScreen from './screens/admin/AnnotationsListScreen';
 import MapOverviewScreen from './screens/admin/MapOverviewScreen';
+import EventsListScreen from './screens/admin/EventsListScreen';
+import EventFormScreen from './screens/admin/EventFormScreen';
 
 const Stack = createStackNavigator();
 
@@ -55,6 +57,8 @@ const AppNavigator = () => {
             <Stack.Screen name="EdgeForm" component={EdgeFormScreen} />
             <Stack.Screen name="AnnotationsList" component={AnnotationsListScreen} />
             <Stack.Screen name="MapOverview" component={MapOverviewScreen} />
+            <Stack.Screen name="EventsList" component={EventsListScreen} />
+            <Stack.Screen name="EventForm" component={EventFormScreen} />
           </>
         )}
       </Stack.Navigator>
