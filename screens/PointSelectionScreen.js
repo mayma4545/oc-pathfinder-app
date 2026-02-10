@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import NetInfo from '@react-native-community/netinfo';
+import { useFocusEffect } from '@react-navigation/native';
 import { THEME_COLORS, APP_CONFIG } from '../config';
 import ApiService from '../services/ApiService';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,8 +25,11 @@ import OfflineService from '../services/OfflineService';
 
 const PointSelectionScreen = ({ navigation }) => {
   const { isAdmin, login } = useAuth();
+  const { isDownloading, startMetadataDownload } = useDownload();
   const [nodes, setNodes] = useState([]);
+  const [events, setEvents] = useState([]);
   const [filteredNodes, setFilteredNodes] = useState([]);
+  const [filteredEvents, setFilteredEvents] = useState([]);
   const [startPoint, setStartPoint] = useState(null);
   const [endPoint, setEndPoint] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
@@ -49,9 +53,9 @@ const PointSelectionScreen = ({ navigation }) => {
   const [forceOfflineMode, setForceOfflineMode] = useState(false); // Manual offline mode toggle
 
   useEffect(() => {
-    loadNodes();
     loadImageQualitySetting();
     checkOfflineData();
+    checkFirstRun();
     
     // Subscribe to network status
     const unsubscribe = NetInfo.addEventListener(state => {
@@ -61,25 +65,111 @@ const PointSelectionScreen = ({ navigation }) => {
     return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    // Filter nodes based on search query
-    if (searchQuery.trim() === '') {
-      setFilteredNodes(nodes);
-    } else {
-      const filtered = nodes.filter(
-        (node) =>
-          node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          node.node_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          node.building.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      setFilteredNodes(filtered);
+  const checkFirstRun = async () => {
+    try {
+      const initialDownloadDone = await AsyncStorage.getItem('HAS_INITIAL_DOWNLOAD');
+      const hasData = await OfflineService.isPathfindingAvailable();
+      
+      if (initialDownloadDone !== 'true' || !hasData) {
+        // If online, prompt for metadata-only download
+        const netState = await NetInfo.fetch();
+        if (netState.isConnected) {
+          Alert.alert(
+            'Welcome!',
+            'To use the app offline and get faster pathfinding, we need to download the campus map metadata (~2MB). Images will be loaded on-demand.',
+            [
+              {
+                text: 'Later',
+                style: 'cancel'
+              },
+              {
+                text: 'Download Now',
+                onPress: async () => {
+                  const result = await startMetadataDownload();
+                  if (result.success) {
+                    await AsyncStorage.setItem('HAS_INITIAL_DOWNLOAD', 'true');
+                    setOfflineDataAvailable(true);
+                  }
+                }
+              }
+            ]
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error in checkFirstRun:', error);
     }
-    console.log('Search query:', searchQuery, '| Filtered count:', filteredNodes.length, '| Total nodes:', nodes.length);
-  }, [searchQuery, nodes]);
+  };
 
-  const loadNodes = async () => {
+  // Reload data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadNodesAndEvents();
+    }, [])
+  );
+
+  useEffect(() => {
+    // Use combined search for events and nodes
+    const performSearch = async () => {
+      // Define searchable node types (only rooms, offices, restrooms)
+      const nonSearchableTypes = ['junction', 'staircase', 'hallway', 'entrance', 'exit', 'elevator', 'directory', 'landmark'];
+      
+      if (searchQuery.trim() === '') {
+        // Filter out non-searchable nodes and nodes with building "none"
+        const searchableNodes = nodes.filter(
+          (node) => !nonSearchableTypes.includes(node.node_type) && 
+                    node.building && 
+                    node.building.toLowerCase() !== 'none'
+        );
+        setFilteredNodes(searchableNodes);
+        setFilteredEvents([]);
+        return;
+      }
+
+      try {
+        const results = await ApiService.combinedSearch(searchQuery);
+        if (results.success) {
+          setFilteredEvents(results.events || []);
+          // Filter out non-searchable nodes and nodes with building "none" from API results
+          const searchableNodes = (results.nodes || []).filter(
+            (node) => !nonSearchableTypes.includes(node.node_type) && 
+                      node.building && 
+                      node.building.toLowerCase() !== 'none'
+          );
+          setFilteredNodes(searchableNodes);
+        }
+      } catch (error) {
+        console.error('Search error:', error);
+        // Fallback to local filtering of nodes and events
+        const filteredNodesLocal = nodes.filter(
+          (node) =>
+            // Exclude non-searchable types and building "none"
+            !nonSearchableTypes.includes(node.node_type) &&
+            node.building &&
+            node.building.toLowerCase() !== 'none' &&
+            (node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            node.node_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            node.building.toLowerCase().includes(searchQuery.toLowerCase()))
+        );
+        const filteredEventsLocal = events.filter(
+          (event) =>
+            event.event_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (event.description && event.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+            (event.category && event.category.toLowerCase().includes(searchQuery.toLowerCase()))
+        );
+        setFilteredNodes(filteredNodesLocal);
+        setFilteredEvents(filteredEventsLocal);
+      }
+    };
+
+    performSearch();
+  }, [searchQuery, nodes, events]);
+
+  const loadNodesAndEvents = async () => {
     try {
       setLoading(true);
+      
+      // Load nodes
       const response = await ApiService.getNodes();
       console.log('Nodes response:', response);
       if (response.success) {
@@ -88,6 +178,18 @@ const PointSelectionScreen = ({ navigation }) => {
       } else {
         console.error('Failed to load nodes:', response);
         Alert.alert('Error', response.error || 'Failed to load nodes');
+      }
+
+      // Load events
+      try {
+        const eventsResponse = await ApiService.getEvents();
+        if (eventsResponse.success) {
+          setEvents(eventsResponse.events);
+          console.log('Events loaded:', eventsResponse.events.length);
+        }
+      } catch (error) {
+        console.warn('Failed to load events:', error);
+        // Don't show error - events are optional
       }
     } catch (error) {
       console.error('Error loading nodes:', error);
@@ -185,6 +287,76 @@ const PointSelectionScreen = ({ navigation }) => {
     setSearchQuery('');
   };
 
+  const selectEvent = (event) => {
+    // Auto-fill destination with event's node location
+    if (selectingType === 'start') {
+      setStartPoint(event.location);
+    } else {
+      setEndPoint(event.location);
+    }
+    setModalVisible(false);
+    setSearchQuery('');
+  };
+
+  const renderEventItem = ({ item }) => {
+    const formatDate = (datetime) => {
+      if (!datetime) return '';
+      const date = new Date(datetime);
+      return date.toLocaleDateString();
+    };
+
+    return (
+      <TouchableOpacity
+        style={styles.nodeItem}
+        onPress={() => selectEvent(item)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.nodeInfo}>
+          <View style={styles.eventBadge}>
+            <Text style={styles.eventBadgeText}>EVENT</Text>
+          </View>
+          <Text style={styles.nodeName}>{item.event_name}</Text>
+          <Text style={styles.nodeDetails}>
+            {item.category} • {item.node?.building} • Floor {item.node?.floor_level}
+          </Text>
+          {item.start_datetime && (
+            <Text style={styles.eventTime}>
+              {formatDate(item.start_datetime)}
+            </Text>
+          )}
+        </View>
+        <Text style={styles.selectIcon}>›</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderNodeItem = ({ item }) => {
+    console.log('Rendering node:', item.name);
+    return (
+      <TouchableOpacity
+        style={styles.nodeItem}
+        onPress={() => selectNode(item)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.nodeInfo}>
+          <Text style={styles.nodeName}>{item.name}</Text>
+          <Text style={styles.nodeDetails}>
+            {item.building} • Floor {item.floor_level} • {item.node_code}
+          </Text>
+        </View>
+        <Text style={styles.selectIcon}>›</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderItem = ({ item }) => {
+    if (item.type === 'event') {
+      return renderEventItem({ item });
+    } else {
+      return renderNodeItem({ item });
+    }
+  };
+
   const handleFindPath = async () => {
     if (!startPoint || !endPoint) {
       Alert.alert('Error', 'Please select both starting point and destination');
@@ -240,25 +412,6 @@ const PointSelectionScreen = ({ navigation }) => {
       imageQuality: imageQuality,
       isOffline: false,
     });
-  };
-
-  const renderNodeItem = ({ item }) => {
-    console.log('Rendering node:', item.name);
-    return (
-      <TouchableOpacity
-        style={styles.nodeItem}
-        onPress={() => selectNode(item)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.nodeInfo}>
-          <Text style={styles.nodeName}>{item.name}</Text>
-          <Text style={styles.nodeDetails}>
-            {item.building} • Floor {item.floor_level} • {item.node_code}
-          </Text>
-        </View>
-        <Text style={styles.selectIcon}>›</Text>
-      </TouchableOpacity>
-    );
   };
 
   return (
@@ -412,25 +565,31 @@ const PointSelectionScreen = ({ navigation }) => {
               />
             </View>
 
-            {/* Nodes List */}
+            {/* Nodes and Events List */}
             <FlatList
-              data={filteredNodes}
-              renderItem={renderNodeItem}
-              keyExtractor={(item) => item.node_id.toString()}
-              extraData={filteredNodes}
+              data={[
+                ...filteredEvents.map(e => ({ ...e, type: 'event' })),
+                ...filteredNodes.map(n => ({ ...n, type: 'node' }))
+              ]}
+              renderItem={renderItem}
+              keyExtractor={(item) => 
+                item.type === 'event' 
+                  ? `event-${item.event_id}` 
+                  : `node-${item.node_id}`
+              }
               style={styles.nodesList}
               contentContainerStyle={styles.nodesListContent}
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
                   <Text style={styles.emptyText}>
-                    {loading ? 'Loading nodes...' : 
-                     searchQuery.trim() !== '' ? 'No matching nodes found' :
-                     nodes.length === 0 ? 'No nodes available' : 'No nodes found'}
+                    {loading ? 'Loading...' : 
+                     searchQuery.trim() !== '' ? 'No matching locations or events found' :
+                     nodes.length === 0 ? 'No locations available' : 'No locations found'}
                   </Text>
                   {!loading && nodes.length === 0 && (
                     <TouchableOpacity
                       style={styles.retryButton}
-                      onPress={loadNodes}
+                      onPress={loadNodesAndEvents}
                     >
                       <Text style={styles.retryButtonText}>Retry</Text>
                     </TouchableOpacity>
@@ -562,15 +721,28 @@ const SettingsModalContent = ({ imageQuality, saveImageQualitySetting, onClose, 
 
   const handleDownload = async () => {
     Alert.alert(
-      'Download Resources',
-      'This will download all nodes, edges, and 360° images for offline use. This may take a while and use significant storage space. Continue?',
+      'Download Map Data',
+      'Choose your download preference:',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
-          text: 'Download', 
+          text: 'Metadata Only (Fast)', 
+          onPress: async () => {
+            const result = await startMetadataDownload();
+            if (result.success) {
+              await AsyncStorage.setItem('HAS_INITIAL_DOWNLOAD', 'true');
+              Alert.alert('Download Complete', 'Metadata downloaded successfully. Images will load on-demand.');
+            } else if (result.error !== 'Download already in progress') {
+              Alert.alert('Download Failed', result.error || 'An error occurred');
+            }
+          }
+        },
+        { 
+          text: 'Full Download (Includes Images)', 
           onPress: async () => {
             const result = await startDownload();
             if (result.success) {
+              await AsyncStorage.setItem('HAS_INITIAL_DOWNLOAD', 'true');
               Alert.alert(
                 'Download Complete',
                 `Downloaded ${result.nodesCount} nodes, ${result.edgesCount} edges, and ${result.imagesCount} images.`
@@ -1444,6 +1616,25 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.5,
+  },
+  eventBadge: {
+    backgroundColor: THEME_COLORS.secondary,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginBottom: 6,
+  },
+  eventBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  eventTime: {
+    fontSize: 12,
+    color: THEME_COLORS.primary,
+    marginTop: 4,
+    fontWeight: '500',
   },
 });
 

@@ -51,6 +51,13 @@ const AdminDashboardScreen = ({ navigation }) => {
       color: '#2196F3',
     },
     {
+      title: 'Manage Events',
+      icon: '🎉',
+      description: 'Create and manage campus events',
+      screen: 'EventsList',
+      color: '#E91E63',
+    },
+    {
       title: 'Manage Annotations',
       icon: '🏷️',
       description: 'Add labels to 360° panorama views',

@@ -28,12 +28,26 @@ const LoginScreen = ({ navigation }) => {
     setLoading(true);
     try {
       const result = await login(username, password);
-      if (result.success) {
-        navigation.replace('AdminDashboard');
+      console.log('Login result:', result);
+      
+      if (result && result.success === true) {
+        try {
+          // Verify navigation state before replacing
+          navigation.replace('AdminDashboard');
+        } catch (navError) {
+          console.error('Navigation failed:', navError);
+          // Fallback or retry if needed, but prevent crash
+          // If replace fails, we might just be staying on this screen, which is fine if auth worked
+          // But the user needs to get to the dashboard.
+          // If replace fails, it's likely because the route isn't ready. 
+          // We can try navigate instead, or just log it.
+        }
       } else {
-        Alert.alert('Login Failed', result.error || 'Invalid credentials');
+        const errorMessage = result?.error || 'Invalid credentials';
+        Alert.alert('Login Failed', errorMessage);
       }
     } catch (error) {
+      console.error('Login exception:', error);
       Alert.alert('Error', 'Failed to login. Please try again.');
     } finally {
       setLoading(false);

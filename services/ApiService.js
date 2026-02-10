@@ -2,11 +2,12 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL, API_ENDPOINTS } from '../config';
 import OfflineService from './OfflineService';
+import { isNetworkError } from '../utils/networkUtils';
 
 // Create axios instance
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 5000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -27,13 +28,17 @@ api.interceptors.request.use(
 );
 
 // Response interceptor for error handling
+let logoutCallback = null;
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
       // Clear token on unauthorized
-      await AsyncStorage.removeItem('authToken');
-      await AsyncStorage.removeItem('user');
+      await AsyncStorage.multiRemove(['authToken', 'user', 'isAdmin']);
+      if (logoutCallback) {
+        logoutCallback();
+      }
     }
     return Promise.reject(error);
   }
@@ -41,15 +46,18 @@ api.interceptors.response.use(
 
 // API Service functions
 const ApiService = {
+  setLogoutCallback: (callback) => {
+    logoutCallback = callback;
+  },
   // ============= Public APIs =============
-  
+
   /**
    * Get list of all nodes with optional filtering
    * Falls back to offline cache if network unavailable
    */
   getNodes: async (params = {}, options = {}) => {
     const { offlineOnly = false } = options;
-    
+
     // If offline only mode, use cached data
     if (offlineOnly) {
       const offlineNodes = await OfflineService.getNodes();
@@ -61,7 +69,7 @@ const ApiService = {
 
     try {
       const response = await api.get(API_ENDPOINTS.NODES_LIST, { params });
-      
+
       // Background sync: Update offline cache if enabled (don't await, run in background)
       OfflineService.isOfflineEnabled().then(async (enabled) => {
         if (enabled && response.data.success) {
@@ -69,15 +77,15 @@ const ApiService = {
           await OfflineService.saveNodes(response.data.nodes);
         }
       }).catch(err => console.warn('Background cache update failed:', err));
-      
+
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - fallback to offline
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         console.log('Network unavailable, using cached nodes');
         const offlineNodes = await OfflineService.getNodes();
@@ -111,11 +119,11 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - extract buildings from cached nodes
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         const offlineNodes = await OfflineService.getNodes();
         if (offlineNodes && offlineNodes.length > 0) {
@@ -139,11 +147,11 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - fallback to offline
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         const offlineMap = await OfflineService.getCampusMap();
         if (offlineMap) {
@@ -175,9 +183,9 @@ const ApiService = {
     if (offlineOnly || preferOffline) {
       console.log('Using offline pathfinding...');
       const offlineResult = await OfflineService.findPath(startCode, goalCode, avoidStairs);
-      
+
       console.log('Offline result:', { success: offlineResult.success, error: offlineResult.error });
-      
+
       // If offline only or offline succeeded, return the result
       if (offlineOnly || offlineResult.success) {
         return offlineResult;
@@ -196,31 +204,31 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error') ||
-                             error.message?.includes('timeout');
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error') ||
+        error.message?.includes('timeout');
 
       // If network error, try offline fallback
       if (isNetworkError) {
         console.log('Network unavailable, attempting offline pathfinding...');
         const offlineResult = await OfflineService.findPath(startCode, goalCode, avoidStairs);
-        
+
         if (offlineResult.success) {
           console.log('Offline pathfinding succeeded');
           return offlineResult;
         }
-        
+
         // Both server and offline failed - provide helpful error message
         console.error('Offline pathfinding failed:', offlineResult.error);
-        
+
         // Check if offline data exists
         const hasOfflineData = await OfflineService.isOfflineEnabled();
-        const errorMessage = hasOfflineData 
+        const errorMessage = hasOfflineData
           ? `No path found between the specified nodes. ${offlineResult.error || ''}`
           : 'No internet connection and no offline data available. Please connect to the internet or download offline maps from Settings > Offline Mode.';
-        
+
         return {
           success: false,
           error: errorMessage,
@@ -244,11 +252,11 @@ const ApiService = {
       return { ...response.data, offline: false };
     } catch (error) {
       // Check if it's a network error - fallback to offline
-      const isNetworkError = !error.response || 
-                             error.code === 'ECONNABORTED' ||
-                             error.code === 'ERR_NETWORK' ||
-                             error.message?.includes('Network Error');
-      
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
       if (isNetworkError) {
         console.log('Network unavailable, using cached edges');
         const offlineEdges = await OfflineService.getEdges();
@@ -284,7 +292,7 @@ const ApiService = {
         username,
         password,
       });
-      
+
       if (response.data.success) {
         // Store auth token
         if (response.data.token) {
@@ -294,7 +302,7 @@ const ApiService = {
         await AsyncStorage.setItem('user', JSON.stringify(response.data.user));
         await AsyncStorage.setItem('isAdmin', 'true');
       }
-      
+
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -426,6 +434,146 @@ const ApiService = {
   deleteAnnotation: async (annotationId) => {
     try {
       const response = await api.delete(`${API_ENDPOINTS.ANNOTATION_DELETE}${annotationId}/delete/`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  // ============= Event APIs =============
+
+  /**
+   * Get active/upcoming events with optional filtering
+   * Falls back to offline cache if network unavailable
+   */
+  getEvents: async (params = {}, options = {}) => {
+    const { offlineOnly = false } = options;
+
+    // If offline only mode, use cached data
+    if (offlineOnly) {
+      const offlineEvents = await OfflineService.getEvents();
+      if (offlineEvents) {
+        return { success: true, events: offlineEvents, offline: true };
+      }
+      return { success: false, error: 'No offline data available', offline: true };
+    }
+
+    try {
+      const response = await api.get(API_ENDPOINTS.EVENTS_LIST, { params });
+
+      // Background sync: Update offline cache if enabled
+      OfflineService.isOfflineEnabled().then(async (enabled) => {
+        if (enabled && response.data.success) {
+          console.log('📥 Background sync: Updating cached events...');
+          await OfflineService.saveEvents(response.data.events);
+        }
+      }).catch(err => console.warn('Background event cache update failed:', err));
+
+      return { ...response.data, offline: false };
+    } catch (error) {
+      // Check if it's a network error - fallback to offline
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
+      if (isNetworkError) {
+        console.log('Network unavailable, using cached events');
+        const offlineEvents = await OfflineService.getEvents();
+        if (offlineEvents && offlineEvents.length > 0) {
+          return { success: true, events: offlineEvents, offline: true };
+        }
+      }
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Get event details by ID
+   */
+  getEventDetail: async (eventId) => {
+    try {
+      const response = await api.get(`${API_ENDPOINTS.EVENT_DETAIL}${eventId}/`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Combined search for events and nodes
+   * Falls back to offline search if network unavailable
+   */
+  combinedSearch: async (query, options = {}) => {
+    const { offlineOnly = false } = options;
+
+    if (offlineOnly) {
+      const results = await OfflineService.combinedSearch(query);
+      return { success: true, ...results, offline: true };
+    }
+
+    try {
+      const response = await api.get(API_ENDPOINTS.EVENTS_SEARCH, { params: { query } });
+      return { ...response.data, offline: false };
+    } catch (error) {
+      const isNetworkError = !error.response ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ERR_NETWORK' ||
+        error.message?.includes('Network Error');
+
+      if (isNetworkError) {
+        console.log('Network unavailable, using offline combined search');
+        const results = await OfflineService.combinedSearch(query);
+        return { success: true, ...results, offline: true };
+      }
+      throw error.response?.data || error;
+    }
+  },
+
+  // ============= Admin Event CRUD =============
+
+  /**
+   * Get all events (admin only)
+   */
+  getAllEvents: async () => {
+    try {
+      const response = await api.get(API_ENDPOINTS.EVENTS_ALL);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Create new event (admin only)
+   */
+  createEvent: async (eventData) => {
+    try {
+      const response = await api.post(API_ENDPOINTS.EVENT_CREATE, eventData);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Update existing event (admin only)
+   */
+  updateEvent: async (eventId, eventData) => {
+    try {
+      const response = await api.put(`${API_ENDPOINTS.EVENT_UPDATE}${eventId}/update/`, eventData);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
+
+  /**
+   * Delete event (admin only)
+   */
+  deleteEvent: async (eventId) => {
+    try {
+      const response = await api.delete(`${API_ENDPOINTS.EVENT_DELETE}${eventId}/delete/`);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;

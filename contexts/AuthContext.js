@@ -11,17 +11,27 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     checkAuthStatus();
+    
+    // Register callback for session expiry (401 from API)
+    ApiService.setLogoutCallback(() => {
+      setUser(null);
+      setIsAdmin(false);
+      // We can also show an alert here if needed, but the redirect is automatic via state change
+    });
   }, []);
 
   const checkAuthStatus = async () => {
     try {
       const storedUser = await AsyncStorage.getItem('user');
       const adminStatus = await AsyncStorage.getItem('isAdmin');
+      const token = await AsyncStorage.getItem('authToken');
       
-      if (storedUser && adminStatus === 'true') {
+      if (storedUser && adminStatus === 'true' && token) {
         setUser(JSON.parse(storedUser));
         setIsAdmin(true);
       } else {
+        // Inconsistent state or no session
+        await AsyncStorage.multiRemove(['user', 'isAdmin', 'authToken']);
         setUser(null);
         setIsAdmin(false);
       }
@@ -46,9 +56,10 @@ export const AuthProvider = ({ children }) => {
         return { success: false, error: response.error };
       }
     } catch (error) {
+      const errorMessage = error.error || error.message || 'Login failed. Please try again.';
       return { 
         success: false, 
-        error: error.error || 'Login failed. Please try again.' 
+        error: errorMessage
       };
     }
   };

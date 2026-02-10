@@ -14,6 +14,7 @@ const STORAGE_KEYS = {
   NODES: '@offline_nodes',
   EDGES: '@offline_edges',
   CAMPUS_MAP: '@offline_campus_map',
+  EVENTS: '@offline_events',
   LAST_SYNC: '@offline_last_sync',
   DATA_VERSION: '@offline_data_version',
   OFFLINE_ENABLED: '@offline_enabled',
@@ -37,6 +38,9 @@ class OfflineService {
       percentage: 0,
       error: null,
     };
+    this.nodesMemoryCache = null;
+    this.edgesMemoryCache = null;
+    this.eventsMemoryCache = null;
   }
 
   /**
@@ -211,8 +215,10 @@ class OfflineService {
       const localFile = this.getLocal360ImagePath(node.node_id);
       
       if (localFile.exists) {
-        console.log(`Using cached image for node ${node.node_id}`);
+        console.log(`📦 Using cached image for node ${node.node_id}: ${localFile.uri}`);
         return localFile.uri;
+      } else {
+        console.log(`🌐 No cache for node ${node.node_id}, using remote: ${imageUrl}`);
       }
       
       // Fall back to remote URL if not cached
@@ -235,8 +241,10 @@ class OfflineService {
       const localFile = this.getLocalCampusMapPath(mapId);
       
       if (localFile.exists) {
-        console.log(`Using cached campus map image`);
+        console.log(`📦 Using cached campus map image: ${localFile.uri}`);
         return localFile.uri;
+      } else {
+        console.log(`🌐 No cached map, using remote: ${mapImageUrl}`);
       }
       
       // Fall back to remote URL if not cached
@@ -252,10 +260,51 @@ class OfflineService {
    */
   async downloadImage(url, filename) {
     try {
-      await File.downloadFileAsync(url, IMAGE_360_DIR);
+      if (!url) {
+        console.warn('No URL provided for image download');
+        return false;
+      }
+
+      console.log(`Downloading image: ${filename}`);
+      const localFile = new File(IMAGE_360_DIR, filename);
+      
+      // Download using fetch and get as blob
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      // Get response as blob, then convert to base64
+      const blob = await response.blob();
+      
+      // Use FileReader to convert blob to base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result;
+          resolve(base64data);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      
+      // Extract the base64 data (remove data:image/jpeg;base64, prefix)
+      const base64Data = base64.split(',')[1];
+      
+      // Convert base64 to Uint8Array
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      // Write to file
+      await localFile.write(bytes);
+      
+      console.log(`✅ Downloaded: ${filename} (${(bytes.length / 1024 / 1024).toFixed(2)} MB)`);
       return true;
     } catch (error) {
-      console.error(`Failed to download image: ${url}`, error);
+      console.error(`❌ Failed to download image: ${url}`, error.message);
       return false;
     }
   }
@@ -265,6 +314,7 @@ class OfflineService {
    */
   async saveNodes(nodes) {
     try {
+      this.nodesMemoryCache = nodes;
       await AsyncStorage.setItem(STORAGE_KEYS.NODES, JSON.stringify(nodes));
       return true;
     } catch (error) {
@@ -277,9 +327,13 @@ class OfflineService {
    * Get nodes from local storage
    */
   async getNodes() {
+    if (this.nodesMemoryCache) return this.nodesMemoryCache;
+
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.NODES);
-      return data ? JSON.parse(data) : null;
+      const nodes = data ? JSON.parse(data) : null;
+      if (nodes) this.nodesMemoryCache = nodes;
+      return nodes;
     } catch (error) {
       console.error('Failed to get nodes:', error);
       return null;
@@ -291,6 +345,7 @@ class OfflineService {
    */
   async saveEdges(edges) {
     try {
+      this.edgesMemoryCache = edges;
       await AsyncStorage.setItem(STORAGE_KEYS.EDGES, JSON.stringify(edges));
       return true;
     } catch (error) {
@@ -303,9 +358,12 @@ class OfflineService {
    * Get edges from local storage
    */
   async getEdges() {
+    if (this.edgesMemoryCache) return this.edgesMemoryCache;
+
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.EDGES);
       const edges = data ? JSON.parse(data) : null;
+      if (edges) this.edgesMemoryCache = edges;
       console.log('Retrieved edges from storage, count:', edges?.length || 0);
       return edges;
     } catch (error) {
@@ -337,6 +395,171 @@ class OfflineService {
     } catch (error) {
       console.error('Failed to get campus map:', error);
       return null;
+    }
+  }
+
+  /**
+   * Save events to local storage
+   */
+  async saveEvents(events) {
+    try {
+      this.eventsMemoryCache = events;
+      await AsyncStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(events));
+      console.log('Events saved to cache, count:', events?.length || 0);
+      return true;
+    } catch (error) {
+      console.error('Failed to save events:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get events from local storage
+   * Filters to show only active/upcoming events
+   */
+  async getEvents() {
+    if (this.eventsMemoryCache) return this.eventsMemoryCache;
+
+    try {
+      const data = await AsyncStorage.getItem(STORAGE_KEYS.EVENTS);
+      if (!data) return null;
+
+      const events = JSON.parse(data);
+      const now = new Date();
+
+      // Filter to show only active/upcoming events
+      const activeEvents = events.filter(event => {
+        if (!event.end_datetime) return true;
+        return new Date(event.end_datetime) >= now;
+      });
+
+      if (activeEvents) this.eventsMemoryCache = activeEvents;
+      console.log('Retrieved events from storage, count:', activeEvents?.length || 0);
+      return activeEvents;
+    } catch (error) {
+      console.error('Failed to get events:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Combined search for events and nodes (offline)
+   * @param {string} query - Search query
+   * @returns {Object} Object with events and nodes arrays
+   */
+  async combinedSearch(query) {
+    try {
+      if (!query || query.trim() === '') {
+        return { events: [], nodes: [] };
+      }
+
+      const lowerQuery = query.toLowerCase();
+
+      // Search events
+      const cachedEvents = await this.getEvents();
+      const matchedEvents = cachedEvents
+        ? cachedEvents.filter(e =>
+            e.event_name.toLowerCase().includes(lowerQuery)
+          ).slice(0, 10)
+        : [];
+
+      // Search nodes
+      const cachedNodes = await this.getNodes();
+      const matchedNodes = cachedNodes
+        ? cachedNodes.filter(n =>
+            n.name.toLowerCase().includes(lowerQuery) ||
+            n.node_code.toLowerCase().includes(lowerQuery) ||
+            n.building.toLowerCase().includes(lowerQuery)
+          ).slice(0, 10)
+        : [];
+
+      return {
+        events: matchedEvents.map(e => ({ ...e, type: 'event' })),
+        nodes: matchedNodes.map(n => ({ ...n, type: 'node' }))
+      };
+    } catch (error) {
+      console.error('Error in offline combined search:', error);
+      return { events: [], nodes: [] };
+    }
+  }
+
+  /**
+   * Check if any offline data exists
+   * @returns {boolean} True if nodes exist in storage
+   */
+  async hasData() {
+    try {
+      const nodes = await this.getNodes();
+      return !!(nodes && nodes.length > 0);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Download ONLY metadata (nodes and edges) - for fast initial setup
+   */
+  async downloadMetadataOnly(apiService) {
+    if (this.isDownloading) {
+      return { success: false, error: 'Download already in progress' };
+    }
+
+    this.isDownloading = true;
+    await this.initialize();
+
+    try {
+      this.updateProgress({
+        status: 'downloading',
+        totalItems: 4,
+        completedItems: 0,
+        currentItem: 'Fetching metadata...',
+        percentage: 0,
+        error: null,
+      });
+
+      // Fetch metadata
+      this.updateProgress({ currentItem: 'Fetching nodes...' });
+      const nodesResponse = await apiService.getNodes();
+      if (!nodesResponse.success) throw new Error('Failed to fetch nodes');
+      const nodes = nodesResponse.nodes || [];
+
+      this.updateProgress({ currentItem: 'Fetching edges...', completedItems: 1 });
+      const edgesResponse = await apiService.getEdges();
+      if (!edgesResponse.success) throw new Error('Failed to fetch edges');
+      const edges = edgesResponse.edges || [];
+
+      this.updateProgress({ currentItem: 'Saving nodes...', completedItems: 2 });
+      await this.saveNodes(nodes);
+
+      this.updateProgress({ currentItem: 'Saving edges...', completedItems: 3 });
+      await this.saveEdges(edges);
+
+      // Save last sync time
+      const syncTime = new Date().toISOString();
+      await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, syncTime);
+      await this.setOfflineEnabled(true);
+
+      this.updateProgress({
+        status: 'completed',
+        currentItem: 'Metadata downloaded!',
+        percentage: 100,
+        completedItems: 4,
+      });
+
+      this.isDownloading = false;
+      return {
+        success: true,
+        nodesCount: nodes.length,
+        edgesCount: edges.length,
+      };
+    } catch (error) {
+      console.error('Metadata download failed:', error);
+      this.updateProgress({
+        status: 'error',
+        error: error.message || 'Metadata download failed',
+      });
+      this.isDownloading = false;
+      return { success: false, error: error.message };
     }
   }
 
@@ -393,10 +616,24 @@ class OfflineService {
       const mapResponse = await apiService.getCampusMap();
       const campusMap = mapResponse.success ? mapResponse.map : null;
 
+      this.updateProgress({ currentItem: 'Fetching events...' });
+      let events = [];
+      try {
+        const eventsResponse = await apiService.getEvents();
+        if (eventsResponse.success) {
+          events = eventsResponse.events || [];
+          console.log('Downloaded events count:', events.length);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch events, continuing without them:', error);
+      }
+
       // Calculate total items to download
-      const nodesWithImages = nodes.filter(n => n.image360_url);
-      const totalItems = 3 + nodesWithImages.length + (campusMap?.image_url ? 1 : 0);
-      // 3 = save nodes + save edges + save campus map data
+      const nodesWithImages = nodes.filter(n => n.image360_url || n.image360);
+      console.log(`📋 Nodes with images: ${nodesWithImages.length}/${nodes.length}`);
+      
+      const totalItems = 4 + nodesWithImages.length + (campusMap?.image_url ? 1 : 0);
+      // 4 = save nodes + save edges + save campus map data + save events
 
       this.updateProgress({
         totalItems,
@@ -421,7 +658,13 @@ class OfflineService {
         await this.saveCampusMap(campusMap);
       }
 
-      let completedItems = 3;
+      this.updateProgress({ currentItem: 'Saving events data...', completedItems: 4 });
+      if (events.length > 0) {
+        await this.saveEvents(events);
+        console.log('Saved events to storage');
+      }
+
+      let completedItems = 4;
 
       // Step 3: Download campus map image
       if (campusMap?.image_url) {
@@ -433,8 +676,12 @@ class OfflineService {
       }
 
       // Step 4: Download all 360° images
+      console.log(`\n📸 Starting image download for ${nodesWithImages.length} nodes...`);
+      
       for (let i = 0; i < nodesWithImages.length; i++) {
         const node = nodesWithImages[i];
+        const imageUrl = node.image360_url || node.image360;
+        
         this.updateProgress({
           currentItem: `Downloading image ${i + 1}/${nodesWithImages.length}: ${node.name}`,
         });
@@ -443,12 +690,20 @@ class OfflineService {
         
         // Check if already cached
         if (!localFile.exists) {
-          await this.downloadImage(node.image360_url, `node_${node.node_id}.jpg`);
+          console.log(`  Downloading node ${node.node_id}: ${node.name}`);
+          const success = await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`);
+          if (!success) {
+            console.warn(`  ⚠️ Failed to download image for node ${node.node_id}`);
+          }
+        } else {
+          console.log(`  ✅ Already cached: node ${node.node_id}`);
         }
 
         completedItems++;
         this.updateProgress({ completedItems });
       }
+      
+      console.log(`✅ Image download complete`);
 
       // Step 5: Initialize pathfinder with downloaded data
       this.updateProgress({
@@ -540,19 +795,25 @@ class OfflineService {
       const nodesChanged = !localNodes || localNodes.length !== serverNodes.length;
       const edgesChanged = !localEdges || localEdges.length !== serverEdges.length;
       
+      // Calculate new nodes
+      const localNodeIds = new Set((localNodes || []).map(n => n.node_id));
+      const newNodesAdded = serverNodes.filter(n => !localNodeIds.has(n.node_id));
+      
       // Find nodes with new/updated images
       const localNodeMap = new Map((localNodes || []).map(n => [n.node_id, n]));
       const nodesNeedingImages = serverNodes.filter(serverNode => {
-        if (!serverNode.image360_url) return false;
+        const imageUrl = serverNode.image360_url || serverNode.image360;
+        if (!imageUrl) return false;
         
         const localNode = localNodeMap.get(serverNode.node_id);
         // Download if: new node OR image URL changed
-        return !localNode || localNode.image360_url !== serverNode.image360_url;
+        return !localNode || localNode.image360_url !== imageUrl || localNode.image360 !== imageUrl;
       });
 
       console.log('Changes detected:');
       console.log('  - Nodes changed:', nodesChanged);
       console.log('  - Edges changed:', edgesChanged);
+      console.log('  - New nodes:', newNodesAdded.length);
       console.log('  - Images to download:', nodesNeedingImages.length);
 
       // Always update nodes and edges data (they're small)
@@ -599,16 +860,20 @@ class OfflineService {
       // Download new images
       for (let i = 0; i < nodesNeedingImages.length; i++) {
         const node = nodesNeedingImages[i];
+        const imageUrl = node.image360_url || node.image360;
+        
         this.updateProgress({
           currentItem: `Downloading new image: ${node.name}`,
           completedItems: i + 2,
         });
 
-        const localPath = this.getLocal360ImagePath(node.node_id);
-        await this.downloadImage(node.image360_url, `node_${node.node_id}.jpg`);
+        await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`);
       }
 
       await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
+      
+      // Reset pathfinder after updating
+      resetPathfinder();
 
       this.updateProgress({
         status: 'completed',
@@ -621,7 +886,7 @@ class OfflineService {
       return {
         success: true,
         hasUpdates: true,
-        newNodes: newNodes.length,
+        newNodes: newNodesAdded.length,
         newImages: nodesNeedingImages.length,
       };
 
@@ -637,11 +902,15 @@ class OfflineService {
    */
   async clearCache() {
     try {
+      this.nodesMemoryCache = null;
+      this.edgesMemoryCache = null;
+      this.eventsMemoryCache = null;
       // Clear AsyncStorage
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.NODES,
         STORAGE_KEYS.EDGES,
         STORAGE_KEYS.CAMPUS_MAP,
+        STORAGE_KEYS.EVENTS,
         STORAGE_KEYS.LAST_SYNC,
         STORAGE_KEYS.DATA_VERSION,
         STORAGE_KEYS.DOWNLOAD_PROGRESS,
@@ -775,6 +1044,66 @@ class OfflineService {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Predictively cache images for nearby nodes
+   * @param {string|number} nodeId - Current node ID
+   */
+  async predictiveCache(nodeId) {
+    try {
+      // 1. Get neighbors
+      const pathfinder = getPathfinder();
+      // Ensure pathfinder is initialized
+      if (!pathfinder.isInitialized()) {
+         // Try to initialize purely from memory if possible, or wait?
+         // Since this is background, we can try to init.
+         // But verifyPathfinding logic suggests we check data first.
+         // Let's assume if we are calling this, we might be online or offline.
+         // If pathfinder isn't ready, we probably can't get neighbors.
+         const initialized = await this.initializePathfinder();
+         if (!initialized) return;
+      }
+
+      // Radius 1 hop
+      const nearbyIds = pathfinder.getNearbyNodeIds(nodeId, 1); 
+      if (!nearbyIds || nearbyIds.length === 0) return;
+
+      console.log(`🔮 Predictive cache triggered for node ${nodeId}, found ${nearbyIds.length} neighbors`);
+
+      // 2. Get node data to access URLs
+      const nodes = await this.getNodes();
+      if (!nodes) return;
+      const nodesMap = new Map(nodes.map(n => [n.node_id, n]));
+
+      // 3. Process each neighbor
+      for (const neighborId of nearbyIds) {
+        // Skip if already cached
+        const isCached = await this.isImageCached(neighborId);
+        if (isCached) {
+          console.log(`  Skipping neighbor ${neighborId}, already cached`);
+          continue;
+        }
+
+        // Get node data
+        const node = nodesMap.get(neighborId);
+        if (!node) continue;
+
+        const imageUrl = node.image360_url || node.image360;
+        if (!imageUrl) continue;
+
+        console.log(`  🔮 Predownloading neighbor ${neighborId}`);
+        
+        // Fire and forget (but handle promise locally)
+        this.downloadImage(imageUrl, `node_${neighborId}.jpg`)
+          .then(success => {
+            if (success) console.log(`  ✅ Predictive download complete: ${neighborId}`);
+          })
+          .catch(err => console.error(`  ❌ Predictive download failed: ${neighborId}`, err));
+      }
+    } catch (error) {
+      console.error('Predictive cache error:', error);
+    }
   }
 
   /**

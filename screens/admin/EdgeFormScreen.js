@@ -148,7 +148,7 @@ const EdgeFormScreen = ({ route, navigation }) => {
       }
     } catch (error) {
       console.error('Submit error:', error);
-      Alert.alert('Error', error.message || 'Failed to save edge');
+      Alert.alert('Error', error.error || error.message || 'Failed to save edge');
     } finally {
       setLoading(false);
     }
