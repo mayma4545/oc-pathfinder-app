@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { THEME_COLORS, MAP_ASSETS } from '../../config';
 import ApiService from '../../services/ApiService';
 import SvgMap from '../../components/SvgMap';
@@ -32,6 +33,7 @@ const NODE_TYPES = [
 const NodeFormScreen = ({ route, navigation }) => {
   const { node } = route.params || {};
   const isEdit = !!node;
+  const existingImageUrl = node?.image360_url || node?.image360 || null;
 
   const [formData, setFormData] = useState({
     node_code: node?.node_code || '',
@@ -42,6 +44,7 @@ const NodeFormScreen = ({ route, navigation }) => {
     description: node?.description || '',
     map_x: node?.map_x?.toString() || '',
     map_y: node?.map_y?.toString() || '',
+    annotation: node?.annotation?.toString() || '',
   });
 
   const [image360, setImage360] = useState(null);
@@ -50,11 +53,31 @@ const NodeFormScreen = ({ route, navigation }) => {
   const [showMapModal, setShowMapModal] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
   const [mapDimensions, setMapDimensions] = useState({ width: 0, height: 0 });
-  const [mapZoom, setMapZoom] = useState(1);
+  const [mapZoom, setMapZoom] = useState(3);
+  const [dotSize, setDotSize] = useState(10); // base radius in pixels
   const [mapLoading, setMapLoading] = useState(true);
+
+  // Generate unique node code based on date and time for new nodes
+  const generateNodeCode = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    return `NODE-${year}${month}${day}-${hours}${minutes}${seconds}`;
+  };
 
   useEffect(() => {
     loadCampusMap();
+    // Auto-generate node code only for new nodes
+    if (!isEdit) {
+      setFormData((prev) => ({
+        ...prev,
+        node_code: generateNodeCode(),
+      }));
+    }
   }, []);
 
   const handleMapLayout = useCallback((e) => {
@@ -79,15 +102,23 @@ const NodeFormScreen = ({ route, navigation }) => {
   };
 
   const pickImage = async () => {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    
+    if (permissionResult.granted === false) {
+      Alert.alert('Permission Denied', 'You need to grant camera roll permissions to upload an image.');
+      return;
+    }
+
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.8,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       base64: true,
+      quality: 0.8,
+      allowsEditing: false,
     });
 
-    if (!result.canceled) {
-      setImage360(result.assets[0]);
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const asset = result.assets[0];
+      setImage360({ uri: asset.uri, base64: asset.base64, name: 'image360.jpg' });
     }
   };
 
@@ -117,9 +148,11 @@ const NodeFormScreen = ({ route, navigation }) => {
     }));
   };
 
-  const zoomIn = () => setMapZoom((prev) => Math.min(prev + 0.25, 3));
+  const zoomIn = () => setMapZoom((prev) => Math.min(prev + 0.25, 5));
   const zoomOut = () => setMapZoom((prev) => Math.max(prev - 0.25, 0.5));
-  const resetZoom = () => setMapZoom(1);
+  const resetZoom = () => setMapZoom(3);
+  const increaseDotSize = () => setDotSize((prev) => Math.min(prev + 2, 30));
+  const decreaseDotSize = () => setDotSize((prev) => Math.max(prev - 2, 4));
 
   const handleSubmit = async () => {
     if (!formData.node_code || !formData.name || !formData.building || !formData.floor_level) {
@@ -141,6 +174,12 @@ const NodeFormScreen = ({ route, navigation }) => {
         payload.image360_base64 = image360.base64;
       }
 
+      if (formData.annotation !== '') {
+        payload.annotation = parseFloat(formData.annotation);
+      } else {
+        payload.annotation = null;
+      }
+
       let response;
       if (isEdit) {
         response = await ApiService.updateNode(node.node_id, payload);
@@ -149,13 +188,25 @@ const NodeFormScreen = ({ route, navigation }) => {
       }
 
       if (response.success) {
-        Alert.alert('Success', `Node ${isEdit ? 'updated' : 'created'} successfully`);
-        navigation.goBack();
+        Alert.alert(
+          'Success',
+          `Node ${isEdit ? 'updated' : 'created'} successfully`,
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
       } else {
         Alert.alert('Error', response.error || 'Operation failed');
       }
     } catch (error) {
-      Alert.alert('Error', error.error || 'Failed to save node');
+      if (error.sessionExpired || error.error === 'Session expired') {
+        Alert.alert('Session Expired', 'Your session has expired. Please log in again.');
+      } else if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        Alert.alert(
+          'Upload Timed Out',
+          'The image upload took too long. Try a smaller image or check your connection.',
+        );
+      } else {
+        Alert.alert('Error', error.error || error.message || 'Failed to save node');
+      }
     } finally {
       setLoading(false);
     }
@@ -172,9 +223,32 @@ const NodeFormScreen = ({ route, navigation }) => {
     const x = (parseFloat(formData.map_x) / 100) * mapDimensions.width;
     const y = (parseFloat(formData.map_y) / 100) * mapDimensions.height;
 
+    // Scale dot inversely with zoom — same logic as MapDisplayScreen
+    const scaledRadius = Math.max(4, dotSize / mapZoom);
+    const diameter = scaledRadius * 2;
+    const borderW = Math.max(1, 3 / mapZoom);
+    const innerSize = scaledRadius * 0.75;
+
     return (
-      <View style={[styles.mapMarker, { left: x - 12, top: y - 12 }]}>
-        <View style={styles.mapMarkerInner} />
+      <View
+        style={[
+          styles.mapMarker,
+          {
+            left: x - scaledRadius,
+            top: y - scaledRadius,
+            width: diameter,
+            height: diameter,
+            borderRadius: scaledRadius,
+            borderWidth: borderW,
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.mapMarkerInner,
+            { width: innerSize, height: innerSize, borderRadius: innerSize / 2 },
+          ]}
+        />
       </View>
     );
   };
@@ -204,14 +278,13 @@ const NodeFormScreen = ({ route, navigation }) => {
           <View style={styles.field}>
             <Text style={styles.label}>Node Code <Text style={styles.required}>*</Text></Text>
             <TextInput
-              style={[styles.input, isEdit && styles.inputDisabled]}
+              style={[styles.input, styles.inputDisabled]}
               value={formData.node_code}
-              onChangeText={(value) => handleChange('node_code', value)}
-              placeholder="e.g., BLDG-101-R01"
+              placeholder="Auto-generated"
               placeholderTextColor="#999"
-              editable={!isEdit}
+              editable={false}
             />
-            <Text style={styles.hint}>Unique identifier for this node</Text>
+            <Text style={styles.hint}>Auto-generated unique identifier (Date-Time based)</Text>
           </View>
 
           <View style={styles.field}>
@@ -282,7 +355,7 @@ const NodeFormScreen = ({ route, navigation }) => {
           </View>
 
           <TouchableOpacity style={styles.imagePickerButton} onPress={pickImage}>
-            <Text style={styles.imagePickerIcon}>📷</Text>
+            <Text style={styles.imagePickerIcon}>�</Text>
             <Text style={styles.imagePickerText}>
               {image360 ? 'Change 360° Image' : 'Select 360° Image'}
             </Text>
@@ -297,11 +370,24 @@ const NodeFormScreen = ({ route, navigation }) => {
             </View>
           )}
 
-          {isEdit && node?.image360_url && !image360 && (
+          {isEdit && existingImageUrl && !image360 && (
             <View style={styles.currentImageInfo}>
               <Text style={styles.currentImageText}>✓ Current 360° image will be kept</Text>
             </View>
           )}
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Initial View Angle (0–360°)</Text>
+            <TextInput
+              style={styles.input}
+              value={formData.annotation}
+              onChangeText={(value) => handleChange('annotation', value)}
+              placeholder="e.g., 90  (facing East)"
+              placeholderTextColor="#999"
+              keyboardType="decimal-pad"
+            />
+            <Text style={styles.hint}>The angle in the 360° image where this room entrance faces (0 = North, 90 = East, 180 = South, 270 = West)</Text>
+          </View>
         </View>
 
         {/* Map Position Section */}
@@ -405,20 +491,37 @@ const NodeFormScreen = ({ route, navigation }) => {
           </View>
 
           <View style={styles.zoomControls}>
-            <TouchableOpacity style={styles.zoomButton} onPress={zoomOut}>
-              <Text style={styles.zoomButtonText}>−</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.zoomButton} onPress={resetZoom}>
-              <Text style={styles.zoomButtonTextSmall}>{Math.round(mapZoom * 100)}%</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.zoomButton} onPress={zoomIn}>
-              <Text style={styles.zoomButtonText}>+</Text>
-            </TouchableOpacity>
-            {formData.map_x && formData.map_y && (
-              <TouchableOpacity style={styles.clearPositionButton} onPress={clearPosition}>
-                <Text style={styles.clearPositionText}>Clear</Text>
+            {/* Zoom row */}
+            <View style={styles.controlRow}>
+              <Text style={styles.controlLabel}>Zoom</Text>
+              <TouchableOpacity style={styles.zoomButton} onPress={zoomOut}>
+                <Text style={styles.zoomButtonText}>−</Text>
               </TouchableOpacity>
-            )}
+              <TouchableOpacity style={styles.zoomButton} onPress={resetZoom}>
+                <Text style={styles.zoomButtonTextSmall}>{Math.round(mapZoom * 100)}%</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.zoomButton} onPress={zoomIn}>
+                <Text style={styles.zoomButtonText}>+</Text>
+              </TouchableOpacity>
+              {formData.map_x && formData.map_y && (
+                <TouchableOpacity style={styles.clearPositionButton} onPress={clearPosition}>
+                  <Text style={styles.clearPositionText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {/* Dot size row */}
+            <View style={styles.controlRow}>
+              <Text style={styles.controlLabel}>Dot</Text>
+              <TouchableOpacity style={styles.zoomButton} onPress={decreaseDotSize}>
+                <Text style={styles.zoomButtonText}>−</Text>
+              </TouchableOpacity>
+              <View style={styles.zoomButton}>
+                <Text style={styles.zoomButtonTextSmall}>{dotSize}px</Text>
+              </View>
+              <TouchableOpacity style={styles.zoomButton} onPress={increaseDotSize}>
+                <Text style={styles.zoomButtonText}>+</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           <ScrollView
@@ -533,15 +636,17 @@ const styles = StyleSheet.create({
   submitButtonDisabled: { backgroundColor: '#CCCCCC', shadowOpacity: 0 },
   submitButtonText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
   bottomSpacer: { height: 30 },
-  mapModalContainer: { flex: 1, backgroundColor: '#1A1A2E' },
-  mapModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, backgroundColor: '#16213E' },
+  mapModalContainer: { flex: 1, backgroundColor: '#1F0F0F' },
+  mapModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, backgroundColor: '#2D1114' },
   mapModalCancel: { color: '#FF6B6B', fontSize: 16, fontWeight: '600' },
   mapModalTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
-  mapModalDone: { color: '#4CAF50', fontSize: 16, fontWeight: '600' },
-  mapPositionInfo: { backgroundColor: '#16213E', padding: 12, alignItems: 'center' },
-  mapPositionText: { color: '#4CAF50', fontSize: 14, fontWeight: '600' },
-  zoomControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 10, backgroundColor: '#16213E', gap: 10 },
-  zoomButton: { width: 50, height: 40, backgroundColor: '#0F3460', borderRadius: 8, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#4CAF50' },
+  mapModalDone: { color: '#D4A843', fontSize: 16, fontWeight: '600' },
+  mapPositionInfo: { backgroundColor: '#2D1114', padding: 12, alignItems: 'center' },
+  mapPositionText: { color: '#D4A843', fontSize: 14, fontWeight: '600' },
+  zoomControls: { flexDirection: 'column', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#2D1114', gap: 6 },
+  controlRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  controlLabel: { color: '#A0AEC0', fontSize: 12, fontWeight: '600', width: 34, textAlign: 'right' },
+  zoomButton: { width: 50, height: 40, backgroundColor: '#3D1518', borderRadius: 8, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#D4A843' },
   zoomButtonText: { color: '#FFFFFF', fontSize: 24, fontWeight: 'bold' },
   zoomButtonTextSmall: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
   clearPositionButton: { paddingHorizontal: 15, height: 40, backgroundColor: '#E74C3C', borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
@@ -553,13 +658,13 @@ const styles = StyleSheet.create({
   mapImage: { width: SCREEN_WIDTH - 40, height: SCREEN_WIDTH - 40 },
   mapMarker: { position: 'absolute', width: 24, height: 24, backgroundColor: THEME_COLORS.primary, borderRadius: 12, borderWidth: 3, borderColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.5, shadowRadius: 4, elevation: 5 },
   mapMarkerInner: { width: 10, height: 10, backgroundColor: '#FFFFFF', borderRadius: 5 },
-  mapInstructions: { backgroundColor: '#16213E', padding: 15 },
+  mapInstructions: { backgroundColor: '#2D1114', padding: 15 },
   mapInstructionsText: { color: '#CCCCCC', fontSize: 13, textAlign: 'center', lineHeight: 20 },
   pickerModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   pickerModalContent: { backgroundColor: '#FFFFFF', borderRadius: 15, padding: 20, width: '100%', maxWidth: 350 },
   pickerModalTitle: { fontSize: 18, fontWeight: 'bold', color: '#2C3E50', textAlign: 'center', marginBottom: 15 },
   pickerOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderRadius: 10, marginBottom: 8, backgroundColor: '#F8F9FA' },
-  pickerOptionSelected: { backgroundColor: '#E3F2FD', borderWidth: 2, borderColor: THEME_COLORS.primary },
+  pickerOptionSelected: { backgroundColor: '#F5E6E6', borderWidth: 2, borderColor: THEME_COLORS.primary },
   pickerOptionText: { fontSize: 16, color: '#2C3E50' },
   pickerOptionCheck: { fontSize: 18, color: THEME_COLORS.primary, fontWeight: 'bold' },
 });

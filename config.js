@@ -3,10 +3,10 @@
 
 // IMPORTANT: Replace YOUR_IP with your actual local IP address
 // To find your IP: Run 'ipconfig' on Windows and look for IPv4 Address
-export const API_BASE_URL = 'http://192.168.0.9:3000'; // For physical device (Expo Go)
+export const API_BASE_URL = 'http://192.168.1.57:3000'; // For physical device (Expo Go)
 // export const API_BASE_URL = 'https://schizocarpic-tanya-precorrectly.ngrok-free.dev'; // For Android emulator
 // export const API_BASE_URL = 'https://prorestoration-enrico-worrisome.ngrok-free.dev'; // For Android emulator
-// export const API_BASE_URL = 'https://express-path-api.onrender.com'; // For production
+//  export const API_BASE_URL = 'https://express-path-api.onrender.com'; // For production
 // export const API_BASE_URL = 'http://localhost:8000'; // For iOS simulator
 // export const API_BASE_URL = 'http://localhost:3000'; // For iOS simulator
 // console.log("hi")
@@ -19,7 +19,7 @@ export const API_ENDPOINTS = {
   FIND_PATH: '/api/mobile/find-path/',
   EDGES_LIST: '/api/mobile/edges/',
   ANNOTATIONS_LIST: '/api/mobile/annotations/',
-  
+
   // Event endpoints
   EVENTS_LIST: '/api/mobile/events/',
   EVENT_DETAIL: '/api/mobile/events/',
@@ -36,7 +36,7 @@ export const API_ENDPOINTS = {
   ANNOTATION_CREATE: '/api/mobile/admin/annotations/create/',
   ANNOTATION_UPDATE: '/api/mobile/admin/annotations/',
   ANNOTATION_DELETE: '/api/mobile/admin/annotations/',
-  
+
   // Admin event endpoints
   EVENTS_ALL: '/api/mobile/admin/events/all/',
   EVENT_CREATE: '/api/mobile/admin/events/create/',
@@ -45,16 +45,18 @@ export const API_ENDPOINTS = {
 };
 
 export const THEME_COLORS = {
-  primary: '#1976D2',
-  secondary: '#FFC107',
-  accent: '#FF5722',
-  background: '#F5F5F5',
-  surface: '#FFFFFF',
-  text: '#212121',
-  textSecondary: '#757575',
-  error: '#D32F2F',
-  success: '#388E3C',
-  warning: '#F57C00',
+  primary: '#800000',        // Maroon
+  primaryDark: '#5C0000',    // Dark Maroon (gradients/emphasis)
+  primaryLight: '#A52A2A',   // Light Maroon (highlights)
+  secondary: '#D4A843',      // Gold (complement to maroon)
+  accent: '#C0392B',         // Warm Red
+  background: '#F8F5F2',     // Warm Off-White
+  surface: '#FFFFFF',        // White
+  text: '#2D2D2D',           // Near Black
+  textSecondary: '#6B6B6B',  // Medium Gray
+  error: '#D32F2F',          // Red
+  success: '#2E7D32',        // Green
+  warning: '#E65100',        // Deep Orange
 };
 
 export const APP_CONFIG = {

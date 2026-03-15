@@ -1,4 +1,5 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ApiService from '../services/ApiService';
 
@@ -12,11 +13,19 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     checkAuthStatus();
     
-    // Register callback for session expiry (401 from API)
-    ApiService.setLogoutCallback(() => {
+    // Register callback for session expiry (401 from API).
+    // sessionExpired=true means the server explicitly said the token has expired
+    // (as opposed to the token being invalid/missing from the start).
+    ApiService.setLogoutCallback((sessionExpired = false) => {
       setUser(null);
       setIsAdmin(false);
-      // We can also show an alert here if needed, but the redirect is automatic via state change
+      if (sessionExpired) {
+        Alert.alert(
+          'Session Expired',
+          'Your session has expired. Please log in again.',
+          [{ text: 'OK' }],
+        );
+      }
     });
   }, []);
 

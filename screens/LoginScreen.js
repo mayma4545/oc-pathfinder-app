@@ -56,7 +56,7 @@ const LoginScreen = ({ navigation }) => {
 
   return (
     <LinearGradient
-      colors={[THEME_COLORS.primary, THEME_COLORS.secondary]}
+      colors={[THEME_COLORS.primary, THEME_COLORS.primary]}
       style={styles.container}
     >
       <KeyboardAvoidingView
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
   },
   inputLabel: {
     fontSize: 14,
-    color: '#FFFFFF',
+    color: '#ffffff',
     marginBottom: 8,
     fontWeight: '600',
   },

@@ -53,15 +53,25 @@ const MapDisplayScreen = ({ route, navigation }) => {
   const [offlineStats, setOfflineStats] = useState({});
   
   // Map zoom state
-  const scale = useRef(new Animated.Value(1)).current;
-  const baseScale = useRef(1);
-  const [currentZoom, setCurrentZoom] = useState(1); // State to trigger re-render on zoom
-  
+  const scale = useRef(new Animated.Value(3)).current;
+  const baseScale = useRef(3);
+  const [currentZoom, setCurrentZoom] = useState(3); // State to trigger re-render on zoom
+
   // Map pan state for scrolling when zoomed
   const mapPanX = useRef(new Animated.Value(0)).current;
   const mapPanY = useRef(new Animated.Value(0)).current;
   const lastMapPanX = useRef(0);
   const lastMapPanY = useRef(0);
+
+  // Fullscreen map state
+  const [showFullscreenMap, setShowFullscreenMap] = useState(false);
+  const fsScale = useRef(new Animated.Value(3)).current;
+  const fsBaseScale = useRef(3);
+  const [fsCurrentZoom, setFsCurrentZoom] = useState(3);
+  const fsPanX = useRef(new Animated.Value(0)).current;
+  const fsPanY = useRef(new Animated.Value(0)).current;
+  const fsLastPanX = useRef(0);
+  const fsLastPanY = useRef(0);
   
   // 360 image pan and zoom state
   const pan360X = useRef(new Animated.Value(0)).current;
@@ -76,6 +86,68 @@ const MapDisplayScreen = ({ route, navigation }) => {
   const transitionOpacity = useRef(new Animated.Value(1)).current;
   const transitionTranslate = useRef(new Animated.Value(0)).current;
 
+  // Google Street View-style transition overlay
+  const [transitionDirection, setTransitionDirection] = useState(1); // 1=forward, -1=backward
+  const ripple1 = useRef(new Animated.Value(0)).current;
+  const ripple2 = useRef(new Animated.Value(0)).current;
+  const ripple3 = useRef(new Animated.Value(0)).current;
+  const rippleOpacity1 = useRef(new Animated.Value(0)).current;
+  const rippleOpacity2 = useRef(new Animated.Value(0)).current;
+  const rippleOpacity3 = useRef(new Animated.Value(0)).current;
+  const arrowPulse = useRef(new Animated.Value(1)).current;
+  const vignetteOpacity = useRef(new Animated.Value(0)).current;
+
+  // Ref to hold the pre-fetched next image URL so the swap is instant
+  const nextImageUrlRef = useRef(null);
+
+  // Start the Street View-style ripple animation
+  const startStreetViewTransition = useCallback((dir) => {
+    setTransitionDirection(dir);
+    // Reset all values
+    ripple1.setValue(0); rippleOpacity1.setValue(0.9);
+    ripple2.setValue(0); rippleOpacity2.setValue(0);
+    ripple3.setValue(0); rippleOpacity3.setValue(0);
+    vignetteOpacity.setValue(0);
+    arrowPulse.setValue(0.6);
+
+    // Staggered ripple rings
+    Animated.stagger(120, [
+      Animated.parallel([
+        Animated.timing(ripple1, { toValue: 1, duration: 600, useNativeDriver: true }),
+        Animated.timing(rippleOpacity1, { toValue: 0, duration: 600, useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.timing(ripple2, { toValue: 1, duration: 600, useNativeDriver: true }),
+        Animated.sequence([
+          Animated.timing(rippleOpacity2, { toValue: 0.7, duration: 50, useNativeDriver: true }),
+          Animated.timing(rippleOpacity2, { toValue: 0, duration: 550, useNativeDriver: true }),
+        ]),
+      ]),
+      Animated.parallel([
+        Animated.timing(ripple3, { toValue: 1, duration: 600, useNativeDriver: true }),
+        Animated.sequence([
+          Animated.timing(rippleOpacity3, { toValue: 0.5, duration: 50, useNativeDriver: true }),
+          Animated.timing(rippleOpacity3, { toValue: 0, duration: 550, useNativeDriver: true }),
+        ]),
+      ]),
+    ]).start();
+
+    // Vignette pulse
+    Animated.sequence([
+      Animated.timing(vignetteOpacity, { toValue: 0.7, duration: 200, useNativeDriver: true }),
+      Animated.timing(vignetteOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+    ]).start();
+
+    // Arrow pulse loop
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(arrowPulse, { toValue: 1.3, duration: 200, useNativeDriver: true }),
+        Animated.timing(arrowPulse, { toValue: 0.8, duration: 200, useNativeDriver: true }),
+      ]),
+      { iterations: 3 }
+    ).start();
+  }, [ripple1, ripple2, ripple3, rippleOpacity1, rippleOpacity2, rippleOpacity3, arrowPulse, vignetteOpacity]);
+
   // Helper function to check if node has 360 image (handles both property names)
   const hasImage360 = useCallback((node) => {
     return !!(node && (node.image360 || node.image360_url));
@@ -89,23 +161,23 @@ const MapDisplayScreen = ({ route, navigation }) => {
   useEffect(() => {
     if (!current360Node || !current360Node.image360) return;
     
-    // Defer image loading until after interactions complete to avoid blocking gestures/animations
-    const task = InteractionManager.runAfterInteractions(() => {
-      getImageUrlWithCache(current360Node).then((cachedUrl) => {
-        setCurrent360ImageUrl(cachedUrl);
-        
-        // Trigger predictive caching for neighbors (further deferred)
-        if (OfflineService.predictiveCache) {
-          setTimeout(() => {
-            OfflineService.predictiveCache(current360Node.node_id);
-          }, 1500);
-        }
-      }).catch((error) => {
-        console.error('Error loading 360 image:', error);
-      });
+    let isMounted = true;
+    
+    getImageUrlWithCache(current360Node).then((cachedUrl) => {
+      if (!isMounted) return;
+      setCurrent360ImageUrl(cachedUrl);
+      
+      // Trigger predictive caching for neighbors
+      if (OfflineService?.predictiveCache) {
+        setTimeout(() => {
+          if (isMounted) OfflineService.predictiveCache(current360Node.node_id);
+        }, 1500);
+      }
+    }).catch((error) => {
+      console.error('Error loading 360 image:', error);
     });
     
-    return () => task.cancel();
+    return () => { isMounted = false; };
   }, [current360Node?.node_id]);
 
   // Update campus map URL when quality setting changes
@@ -285,27 +357,19 @@ const MapDisplayScreen = ({ route, navigation }) => {
         mapPanY.setValue(0);
       },
       onPanResponderMove: (_, gestureState) => {
-        // Calculate bounds based on zoom level
-        const mapWidth = SCREEN_WIDTH - 60; // Account for padding
-        const mapHeight = SCREEN_HEIGHT * 0.5;
-        const maxPanX = (mapWidth * (baseScale.current - 1)) / 2;
-        const maxPanY = (mapHeight * (baseScale.current - 1)) / 2;
-        
-        // Apply movement with bounds
-        const newX = Math.max(-maxPanX, Math.min(maxPanX, lastMapPanX.current + gestureState.dx));
-        const newY = Math.max(-maxPanY, Math.min(maxPanY, lastMapPanY.current + gestureState.dy));
-        
+        // Map is square (SCREEN_WIDTH - 60), use same bound for both axes
+        const mapSize = SCREEN_WIDTH - 60;
+        const maxPan = (mapSize * (baseScale.current - 1)) / 2;
+        const newX = Math.max(-maxPan, Math.min(maxPan, lastMapPanX.current + gestureState.dx));
+        const newY = Math.max(-maxPan, Math.min(maxPan, lastMapPanY.current + gestureState.dy));
         mapPanX.setValue(newX - lastMapPanX.current);
         mapPanY.setValue(newY - lastMapPanY.current);
       },
       onPanResponderRelease: (_, gestureState) => {
-        const mapWidth = SCREEN_WIDTH - 60;
-        const mapHeight = SCREEN_HEIGHT * 0.5;
-        const maxPanX = (mapWidth * (baseScale.current - 1)) / 2;
-        const maxPanY = (mapHeight * (baseScale.current - 1)) / 2;
-        
-        lastMapPanX.current = Math.max(-maxPanX, Math.min(maxPanX, lastMapPanX.current + gestureState.dx));
-        lastMapPanY.current = Math.max(-maxPanY, Math.min(maxPanY, lastMapPanY.current + gestureState.dy));
+        const mapSize = SCREEN_WIDTH - 60;
+        const maxPan = (mapSize * (baseScale.current - 1)) / 2;
+        lastMapPanX.current = Math.max(-maxPan, Math.min(maxPan, lastMapPanX.current + gestureState.dx));
+        lastMapPanY.current = Math.max(-maxPan, Math.min(maxPan, lastMapPanY.current + gestureState.dy));
         
         mapPanX.flattenOffset();
         mapPanY.flattenOffset();
@@ -336,14 +400,11 @@ const MapDisplayScreen = ({ route, navigation }) => {
         mapPanX.setValue(0);
         mapPanY.setValue(0);
       } else {
-        // Constrain pan within new bounds
-        const mapWidth = SCREEN_WIDTH - 60;
-        const mapHeight = SCREEN_HEIGHT * 0.5;
-        const maxPanX = (mapWidth * (baseScale.current - 1)) / 2;
-        const maxPanY = (mapHeight * (baseScale.current - 1)) / 2;
-        
-        lastMapPanX.current = Math.max(-maxPanX, Math.min(maxPanX, lastMapPanX.current));
-        lastMapPanY.current = Math.max(-maxPanY, Math.min(maxPanY, lastMapPanY.current));
+        // Constrain pan within new bounds (map is square: SCREEN_WIDTH - 60)
+        const mapSize = SCREEN_WIDTH - 60;
+        const maxPan = (mapSize * (baseScale.current - 1)) / 2;
+        lastMapPanX.current = Math.max(-maxPan, Math.min(maxPan, lastMapPanX.current));
+        lastMapPanY.current = Math.max(-maxPan, Math.min(maxPan, lastMapPanY.current));
         mapPanX.setValue(lastMapPanX.current);
         mapPanY.setValue(lastMapPanY.current);
       }
@@ -351,13 +412,156 @@ const MapDisplayScreen = ({ route, navigation }) => {
   };
   
   const resetMapZoom = () => {
-    baseScale.current = 1;
-    scale.setValue(1);
-    setCurrentZoom(1); // Update state
-    lastMapPanX.current = 0;
-    lastMapPanY.current = 0;
-    mapPanX.setValue(0);
-    mapPanY.setValue(0);
+    baseScale.current = 3;
+    scale.setValue(3);
+    setCurrentZoom(3);
+    const calibration = MAP_CALIBRATION[MAP_ASSETS.DEFAULT_CAMPUS_MAP] || { scale: 1, offsetX: 0, offsetY: 0 };
+    const firstNode = pathData?.path?.find(n => n.map_x !== null && n.map_y !== null);
+    if (firstNode && mapDimensions.width) {
+      const pt = transformCoordinate({ x: firstNode.map_x, y: firstNode.map_y }, calibration);
+      const dotX = (pt.x / 100) * mapDimensions.width;
+      const dotY = (pt.y / 100) * mapDimensions.height;
+      const mapSize = mapDimensions.width;
+      const maxPan = (mapSize * 2) / 2;
+      const px = Math.max(-maxPan, Math.min(maxPan, -(dotX - mapSize / 2) * 3));
+      const py = Math.max(-maxPan, Math.min(maxPan, -(dotY - mapSize / 2) * 3));
+      lastMapPanX.current = px;
+      lastMapPanY.current = py;
+      mapPanX.setValue(px);
+      mapPanY.setValue(py);
+    } else {
+      lastMapPanX.current = 0;
+      lastMapPanY.current = 0;
+      mapPanX.setValue(0);
+      mapPanY.setValue(0);
+    }
+  };
+
+  // Helper: compute pan offsets to center a dot at (dotX, dotY) within a square map of mapSize at zoomLevel
+  const computeCenterPan = useCallback((dotX, dotY, mapSize, zoomLevel) => {
+    const maxPan = (mapSize * (zoomLevel - 1)) / 2;
+    return {
+      panX: Math.max(-maxPan, Math.min(maxPan, -(dotX - mapSize / 2) * zoomLevel)),
+      panY: Math.max(-maxPan, Math.min(maxPan, -(dotY - mapSize / 2) * zoomLevel)),
+    };
+  }, []);
+
+  // Auto-center on start node when path data and map dimensions become ready
+  useEffect(() => {
+    if (!pathData?.path || !mapDimensions.width) return;
+    const calibration = MAP_CALIBRATION[MAP_ASSETS.DEFAULT_CAMPUS_MAP] || { scale: 1, offsetX: 0, offsetY: 0 };
+    const firstNode = pathData.path.find(n => n.map_x !== null && n.map_y !== null);
+    if (!firstNode) return;
+    const pt = transformCoordinate({ x: firstNode.map_x, y: firstNode.map_y }, calibration);
+    const dotX = (pt.x / 100) * mapDimensions.width;
+    const dotY = (pt.y / 100) * mapDimensions.height;
+    const { panX: px, panY: py } = computeCenterPan(dotX, dotY, mapDimensions.width, 3);
+    lastMapPanX.current = px;
+    lastMapPanY.current = py;
+    mapPanX.setValue(px);
+    mapPanY.setValue(py);
+  }, [pathData, mapDimensions.width]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fullscreen map: pan responder
+  const fsPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        fsPanX.setOffset(fsLastPanX.current);
+        fsPanY.setOffset(fsLastPanY.current);
+        fsPanX.setValue(0);
+        fsPanY.setValue(0);
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const maxPan = (SCREEN_WIDTH * (fsBaseScale.current - 1)) / 2;
+        const newX = Math.max(-maxPan, Math.min(maxPan, fsLastPanX.current + gestureState.dx));
+        const newY = Math.max(-maxPan, Math.min(maxPan, fsLastPanY.current + gestureState.dy));
+        fsPanX.setValue(newX - fsLastPanX.current);
+        fsPanY.setValue(newY - fsLastPanY.current);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const maxPan = (SCREEN_WIDTH * (fsBaseScale.current - 1)) / 2;
+        fsLastPanX.current = Math.max(-maxPan, Math.min(maxPan, fsLastPanX.current + gestureState.dx));
+        fsLastPanY.current = Math.max(-maxPan, Math.min(maxPan, fsLastPanY.current + gestureState.dy));
+        fsPanX.flattenOffset();
+        fsPanY.flattenOffset();
+        fsPanX.setValue(fsLastPanX.current);
+        fsPanY.setValue(fsLastPanY.current);
+      },
+    })
+  ).current;
+
+  const onFsPinchEvent = Animated.event(
+    [{ nativeEvent: { scale: fsScale } }],
+    { useNativeDriver: false }
+  );
+
+  const onFsPinchStateChange = (event) => {
+    if (event.nativeEvent.oldState === State.ACTIVE) {
+      fsBaseScale.current = Math.min(Math.max(fsBaseScale.current * event.nativeEvent.scale, 1), 6);
+      fsScale.setValue(fsBaseScale.current);
+      setFsCurrentZoom(fsBaseScale.current);
+      if (fsBaseScale.current <= 1) {
+        fsLastPanX.current = 0;
+        fsLastPanY.current = 0;
+        fsPanX.setValue(0);
+        fsPanY.setValue(0);
+      } else {
+        const maxPan = (SCREEN_WIDTH * (fsBaseScale.current - 1)) / 2;
+        fsLastPanX.current = Math.max(-maxPan, Math.min(maxPan, fsLastPanX.current));
+        fsLastPanY.current = Math.max(-maxPan, Math.min(maxPan, fsLastPanY.current));
+        fsPanX.setValue(fsLastPanX.current);
+        fsPanY.setValue(fsLastPanY.current);
+      }
+    }
+  };
+
+  const openFullscreenMap = () => {
+    const calibration = MAP_CALIBRATION[MAP_ASSETS.DEFAULT_CAMPUS_MAP] || { scale: 1, offsetX: 0, offsetY: 0 };
+    const firstNode = pathData?.path?.find(n => n.map_x !== null && n.map_y !== null);
+    fsBaseScale.current = 3;
+    fsScale.setValue(3);
+    setFsCurrentZoom(3);
+    if (firstNode) {
+      const pt = transformCoordinate({ x: firstNode.map_x, y: firstNode.map_y }, calibration);
+      const dotX = (pt.x / 100) * SCREEN_WIDTH;
+      const dotY = (pt.y / 100) * SCREEN_WIDTH;
+      const { panX: px, panY: py } = computeCenterPan(dotX, dotY, SCREEN_WIDTH, 3);
+      fsLastPanX.current = px;
+      fsLastPanY.current = py;
+      fsPanX.setValue(px);
+      fsPanY.setValue(py);
+    } else {
+      fsLastPanX.current = 0;
+      fsLastPanY.current = 0;
+      fsPanX.setValue(0);
+      fsPanY.setValue(0);
+    }
+    setShowFullscreenMap(true);
+  };
+
+  const resetFullscreenMap = () => {
+    const calibration = MAP_CALIBRATION[MAP_ASSETS.DEFAULT_CAMPUS_MAP] || { scale: 1, offsetX: 0, offsetY: 0 };
+    const firstNode = pathData?.path?.find(n => n.map_x !== null && n.map_y !== null);
+    fsBaseScale.current = 3;
+    fsScale.setValue(3);
+    setFsCurrentZoom(3);
+    if (firstNode) {
+      const pt = transformCoordinate({ x: firstNode.map_x, y: firstNode.map_y }, calibration);
+      const dotX = (pt.x / 100) * SCREEN_WIDTH;
+      const dotY = (pt.y / 100) * SCREEN_WIDTH;
+      const { panX: px, panY: py } = computeCenterPan(dotX, dotY, SCREEN_WIDTH, 3);
+      fsLastPanX.current = px;
+      fsLastPanY.current = py;
+      fsPanX.setValue(px);
+      fsPanY.setValue(py);
+    } else {
+      fsLastPanX.current = 0;
+      fsLastPanY.current = 0;
+      fsPanX.setValue(0);
+      fsPanY.setValue(0);
+    }
   };
 
   const loadPathAndMap = async () => {
@@ -464,15 +668,21 @@ const MapDisplayScreen = ({ route, navigation }) => {
     setCurrent360Node(targetNode);
     setCurrent360Index(targetIndex);
     
-    // Initialize view to face the next node direction
-    const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
+    // Initialize view to the node's annotation angle (where the room faces in the 360° image)
+    // Fall back to the next-node compass direction if annotation is not set
     let initialAngle = 0;
     
-    if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
-      const nextNode = pathData.path[fullPathIndex + 1];
-      if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
-        initialAngle = nextNode.compass_angle;
-        console.log('🧭 Initial view angle:', initialAngle, '° - Next node:', nextNode.name);
+    if (targetNode.annotation !== null && targetNode.annotation !== undefined) {
+      initialAngle = targetNode.annotation;
+      console.log('🧭 Initial view angle from annotation:', initialAngle, '° -', targetNode.name);
+    } else {
+      const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
+      if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
+        const nextNode = pathData.path[fullPathIndex + 1];
+        if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
+          initialAngle = nextNode.compass_angle;
+          console.log('🧭 Initial view angle from compass_angle:', initialAngle, '° - Next node:', nextNode.name);
+        }
       }
     }
     
@@ -492,89 +702,97 @@ const MapDisplayScreen = ({ route, navigation }) => {
   };
 
   const navigate360 = (direction) => {
-    if (isTransitioning) return; // Prevent multiple clicks during transition
-    
+    if (isTransitioning) return;
+
     const nodesWithImages = pathData?.path?.filter((n) => hasImage360(n)) || [];
     let newIndex = current360Index + direction;
-    
     if (newIndex < 0) newIndex = nodesWithImages.length - 1;
     if (newIndex >= nodesWithImages.length) newIndex = 0;
-    
-    // Update node and index BEFORE animation starts to ensure correct image loads
+
     const targetNode = nodesWithImages[newIndex];
-    setCurrent360Index(newIndex);
-    setCurrent360Node(targetNode);
-    
     setIsTransitioning(true);
-    
-    // Zoom in and fade out animation (moving forward/backward effect)
-    const zoomAmount = direction > 0 ? 1.3 : 0.7; // Zoom in for forward, zoom out for backward
-    const translateAmount = direction > 0 ? -100 : 100; // Move down for forward, up for backward
-    
-    Animated.parallel([
-      Animated.timing(transitionScale, {
-        toValue: zoomAmount,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-      Animated.timing(transitionOpacity, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-      Animated.timing(transitionTranslate, {
-        toValue: translateAmount,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      // Initialize view to face the next node direction
-      const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
+
+    // Start Street View-style overlay animation immediately on click
+    startStreetViewTransition(direction);
+
+    // === Phase 1 (parallel): zoom-into-horizon exit + fetch next image ===
+    // Forward: image zooms in fast (like walking into the scene)
+    // Backward: image zooms out fast
+    const exitScale = direction > 0 ? 1.8 : 0.5;
+    const fadeOutPromise = new Promise((resolve) => {
+      Animated.parallel([
+        Animated.timing(transitionScale, {
+          toValue: exitScale,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(transitionOpacity, {
+          toValue: 0,
+          duration: 350,
+          useNativeDriver: true,
+        }),
+      ]).start(() => resolve());
+    });
+
+    const fetchNextImagePromise = getImageUrlWithCache(targetNode);
+
+    // === Phase 2: wait for both, then swap while invisible ===
+    Promise.all([fadeOutPromise, fetchNextImagePromise]).then(([, nextUrl]) => {
+      nextImageUrlRef.current = nextUrl;
+
+      // Determine initial view angle for the new node
       let initialAngle = 0;
-      
-      if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
-        const nextNode = pathData.path[fullPathIndex + 1];
-        if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
-          initialAngle = nextNode.compass_angle;
+      if (targetNode.annotation !== null && targetNode.annotation !== undefined) {
+        initialAngle = targetNode.annotation;
+      } else {
+        const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
+        if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
+          const nextNode = pathData.path[fullPathIndex + 1];
+          if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
+            initialAngle = nextNode.compass_angle;
+          }
         }
       }
-      
-      // Calculate pan offset for the initial angle
+
       const imageWidth = SCREEN_HEIGHT * 6;
       const initialOffset = -(initialAngle / 360) * imageWidth;
-      
       compassAngle.setValue(initialAngle);
       compassAngleValue.current = initialAngle;
       pan360X.setValue(initialOffset);
       lastPanX.current = initialOffset;
       scale360.setValue(1);
       setBaseScale360(1);
-      
-      // Reset transition values to opposite for fade in
-      transitionScale.setValue(direction > 0 ? 0.7 : 1.3);
+
+      // New image enters from opposite zoom direction
+      // Forward: starts slightly zoomed in (from far away), zooms back to 1
+      // Backward: starts slightly zoomed out (from wide), zooms to 1
+      const enterScale = direction > 0 ? 0.6 : 1.5;
+      transitionScale.setValue(enterScale);
       transitionOpacity.setValue(0);
-      transitionTranslate.setValue(direction > 0 ? 100 : -100);
-      
-      // Fade in and zoom back to normal
-      Animated.parallel([
-        Animated.timing(transitionScale, {
-          toValue: 1,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-        Animated.timing(transitionOpacity, {
-          toValue: 1,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-        Animated.timing(transitionTranslate, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-      ]).start(() => {
-        setIsTransitioning(false);
-      });
+      transitionTranslate.setValue(0);
+
+      // Swap the node + image (still invisible)
+      setCurrent360Index(newIndex);
+      setCurrent360Node(targetNode);
+      setCurrent360ImageUrl(nextUrl);
+
+      // === Phase 3: fade in the new image (zoom-in from distance feel) ===
+      setTimeout(() => {
+        Animated.parallel([
+          Animated.timing(transitionScale, {
+            toValue: 1,
+            duration: 350,
+            useNativeDriver: true,
+          }),
+          Animated.timing(transitionOpacity, {
+            toValue: 1,
+            duration: 350,
+            useNativeDriver: true,
+          }),
+        ]).start(() => {
+          setIsTransitioning(false);
+        });
+      }, 16);
     });
   };
 
@@ -671,45 +889,41 @@ const MapDisplayScreen = ({ route, navigation }) => {
     return { isInView, isAligned, normalizedPosition, relativeAngle };
   }, []);
 
-  const renderPathOverlay = () => {
-    if (!pathData || !pathData.path || !mapDimensions.width) return null;
+  const renderPathOverlay = (dims, zoom) => {
+    const _dims = dims || mapDimensions;
+    const _zoom = zoom != null ? zoom : currentZoom;
+    if (!pathData || !pathData.path || !_dims.width) return null;
 
     const calibration = MAP_CALIBRATION[MAP_ASSETS.DEFAULT_CAMPUS_MAP] || { scale: 1, offsetX: 0, offsetY: 0 };
 
     const points = pathData.path
       .filter((node) => node.map_x !== null && node.map_y !== null)
       .map((node) => {
-        // First get relative point (0-100 range)
         const point = { x: node.map_x, y: node.map_y };
-        // Apply calibration scaling/offset
         const transformed = transformCoordinate(point, calibration);
-        // Map to screen dimensions
         return {
-          x: (transformed.x / 100) * mapDimensions.width,
-          y: (transformed.y / 100) * mapDimensions.height,
+          x: (transformed.x / 100) * _dims.width,
+          y: (transformed.y / 100) * _dims.height,
           ...node,
         };
       });
 
     if (points.length === 0) return null;
 
-    // Create polyline path string
     const pathString = points.map((p) => `${p.x},${p.y}`).join(' ');
-    
-    // Scale dot size inversely with zoom (smaller when zoomed in)
-    // Base sizes at 1x zoom, scale down as zoom increases
+
     const baseRadius = 10;
     const baseStroke = 3;
     const baseLineWidth = 4;
-    const dotRadius = Math.max(4, baseRadius / currentZoom);
-    const strokeWidth = Math.max(1, baseStroke / currentZoom);
-    const lineWidth = Math.max(2, baseLineWidth / currentZoom);
+    const dotRadius = Math.max(4, baseRadius / _zoom);
+    const strokeWidth = Math.max(1, baseStroke / _zoom);
+    const lineWidth = Math.max(2, baseLineWidth / _zoom);
 
     return (
       <Svg
         style={StyleSheet.absoluteFill}
-        width={mapDimensions.width}
-        height={mapDimensions.height}
+        width={_dims.width}
+        height={_dims.height}
       >
         {/* Draw path line */}
         <Polyline
@@ -726,21 +940,19 @@ const MapDisplayScreen = ({ route, navigation }) => {
           const isStart = index === 0;
           const isEnd = index === points.length - 1;
           const has360 = hasImage360(point);
-          
-          // Determine fill color
+
           let fillColor = THEME_COLORS.primary;
-          if (isStart) fillColor = '#4CAF50'; // Green
-          else if (isEnd) fillColor = '#F44336'; // Red
-          else if (has360) fillColor = '#FF9800'; // Orange for 360° available
-          
+          if (isStart) fillColor = '#4CAF50';
+          else if (isEnd) fillColor = '#F44336';
+          else if (has360) fillColor = '#FF9800';
+
           return (
             <React.Fragment key={index}>
-              {/* Outer glow for 360° nodes */}
               {has360 && (
                 <Circle
                   cx={point.x}
                   cy={point.y}
-                  r={dotRadius + 4 / currentZoom}
+                  r={dotRadius + 4 / _zoom}
                   fill="rgba(255, 152, 0, 0.3)"
                   stroke="none"
                 />
@@ -754,8 +966,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
                 strokeWidth={strokeWidth}
                 onPress={() => handleNodePress(point)}
               />
-              {/* Camera icon indicator for 360° nodes (scaled with zoom) */}
-              {has360 && currentZoom >= 1.5 && (
+              {has360 && _zoom >= 1.5 && (
                 <Circle
                   cx={point.x}
                   cy={point.y}
@@ -852,13 +1063,16 @@ const MapDisplayScreen = ({ route, navigation }) => {
           <View style={styles.mapContainer}>
             <View style={styles.mapTitleRow}>
               <Text style={styles.sectionTitle}>Campus Map</Text>
-              {baseScale.current > 1 && (
+              <View style={styles.mapTitleActions}>
                 <TouchableOpacity style={styles.resetZoomButton} onPress={resetMapZoom}>
-                  <Text style={styles.resetZoomText}>Reset</Text>
+                  <Text style={styles.resetZoomText}>⟲ Reset</Text>
                 </TouchableOpacity>
-              )}
+                <TouchableOpacity style={styles.fullscreenButton} onPress={openFullscreenMap}>
+                  <Text style={styles.fullscreenButtonText}>⛶ Fullscreen</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-            <Text style={styles.mapHint}>Pinch to zoom • Swipe to pan when zoomed</Text>
+            <Text style={styles.mapHint}>Pinch to zoom • Drag to pan • Tap ⛶ for fullscreen</Text>
             <View style={styles.mapClipContainer}>
               <PinchGestureHandler
                 onGestureEvent={onPinchEvent}
@@ -879,7 +1093,7 @@ const MapDisplayScreen = ({ route, navigation }) => {
                 >
                   <SvgMap
                     width={mapDimensions.width || SCREEN_WIDTH - 60}
-                    height={mapDimensions.height || SCREEN_HEIGHT * 0.5}
+                    height={mapDimensions.height || SCREEN_WIDTH - 60}
                     onLayout={(event) => {
                       const { width, height } = event.nativeEvent.layout;
                       setMapDimensions({ width, height });
@@ -1125,12 +1339,19 @@ const MapDisplayScreen = ({ route, navigation }) => {
                 })}
               </Animated.View>
 
-              {/* Transition Loading Indicator */}
+              {/* Google Street View-Style Transition Overlay */}
               {isTransitioning && (
-                <View style={styles.transitionOverlay}>
-                  <ActivityIndicator size="large" color="#FFFFFF" />
-                  <Text style={styles.transitionText}>Loading...</Text>
-                </View>
+                <StreetViewTransition
+                  direction={transitionDirection}
+                  ripple1={ripple1}
+                  ripple2={ripple2}
+                  ripple3={ripple3}
+                  rippleOpacity1={rippleOpacity1}
+                  rippleOpacity2={rippleOpacity2}
+                  rippleOpacity3={rippleOpacity3}
+                  arrowPulse={arrowPulse}
+                  vignetteOpacity={vignetteOpacity}
+                />
               )}
 
               {/* UI Toggle Button */}
@@ -1261,6 +1482,83 @@ const MapDisplayScreen = ({ route, navigation }) => {
           )}
         </View>
       </Modal>
+
+      {/* Fullscreen Campus Map Modal */}
+      <Modal
+        visible={showFullscreenMap}
+        animationType="none"
+        onRequestClose={() => setShowFullscreenMap(false)}
+        statusBarTranslucent
+      >
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <View style={styles.fullscreenMapModal}>
+            {/* Header */}
+            <View style={styles.fullscreenMapHeader}>
+              <TouchableOpacity style={styles.fsHeaderButton} onPress={resetFullscreenMap}>
+                <Text style={styles.fsHeaderButtonText}>⟲ Reset</Text>
+              </TouchableOpacity>
+              <Text style={styles.fsHeaderTitle}>📍 Campus Map</Text>
+              <TouchableOpacity style={styles.fsHeaderButton} onPress={() => setShowFullscreenMap(false)}>
+                <Text style={styles.fsHeaderButtonText}>✕ Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Map — fills all remaining screen height */}
+            <View style={styles.fsMapClipContainer}>
+              <PinchGestureHandler
+                onGestureEvent={onFsPinchEvent}
+                onHandlerStateChange={onFsPinchStateChange}
+              >
+                <Animated.View
+                  style={[
+                    styles.fsMapWrapper,
+                    {
+                      transform: [
+                        { translateX: fsPanX },
+                        { translateY: fsPanY },
+                        { scale: fsScale },
+                      ],
+                    },
+                  ]}
+                  {...fsPanResponder.panHandlers}
+                >
+                  <SvgMap width={SCREEN_WIDTH} height={SCREEN_WIDTH} />
+                  {renderPathOverlay({ width: SCREEN_WIDTH, height: SCREEN_WIDTH }, fsCurrentZoom)}
+                </Animated.View>
+              </PinchGestureHandler>
+
+              {/* Floating zoom badge — top-right corner of map area */}
+              <View style={styles.fsZoomBadge} pointerEvents="none">
+                <Text style={styles.fsZoomBadgeText}>🔍 {Math.round(fsCurrentZoom * 100)}%</Text>
+              </View>
+
+              {/* Floating legend — pinned to bottom of map area */}
+              <View style={styles.fsFloatingLegend} pointerEvents="none">
+                <View style={styles.fsFloatingLegendRow}>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: '#4CAF50' }]} />
+                    <Text style={styles.fsLegendText}>Start</Text>
+                  </View>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: '#F44336' }]} />
+                    <Text style={styles.fsLegendText}>End</Text>
+                  </View>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: '#FF9800' }]} />
+                    <Text style={styles.fsLegendText}>360° View</Text>
+                  </View>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: THEME_COLORS.primary }]} />
+                    <Text style={styles.fsLegendText}>Waypoint</Text>
+                  </View>
+                </View>
+                <Text style={styles.fsHint}>Pinch to zoom • Drag to pan</Text>
+              </View>
+            </View>
+          </View>
+        </GestureHandlerRootView>
+      </Modal>
+
       </SafeAreaView>
     </GestureHandlerRootView>
   );
@@ -1419,9 +1717,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  mapTitleActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  fullscreenButton: {
+    backgroundColor: '#2D1114',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+  },
+  fullscreenButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   mapClipContainer: {
     width: '100%',
-    height: SCREEN_HEIGHT * 0.5,
+    aspectRatio: 1,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#F0F0F0',
@@ -1883,6 +2197,135 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: 'bold',
   },
+  // Fullscreen map modal styles
+  fullscreenMapModal: {
+    flex: 1,
+    backgroundColor: '#0A0A0A',
+  },
+  fullscreenMapHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    backgroundColor: '#1F0F0F',
+  },
+  fsHeaderTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  fsHeaderButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 20,
+  },
+  fsHeaderButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  fsZoomBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  fsZoomBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  fsMapClipContainer: {
+    flex: 1,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fsMapWrapper: {
+    position: 'relative',
+  },
+  fsFloatingLegend: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(31, 15, 15, 0.88)',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  fsFloatingLegendRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 4,
+  },
+  fsLegendText: {
+    fontSize: 12,
+    color: '#CCCCCC',
+  },
+  fsHint: {
+    textAlign: 'center',
+    fontSize: 11,
+    color: '#999',
+  },
+  // Street View transition overlay styles
+  svTransitionContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    pointerEvents: 'none',
+    zIndex: 999,
+  },
+  svVignette: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000',
+  },
+  svRipple: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'transparent',
+  },
+  svArrowContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  svChevron: {
+    color: '#FFFFFF',
+    fontSize: 32,
+    fontWeight: 'bold',
+    lineHeight: 28,
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  svLabel: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 2,
+    marginTop: 4,
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
 });
 
 // Memoized 360 image component to prevent unnecessary re-renders
@@ -1940,3 +2383,60 @@ const CompassOverlay = React.memo(({ compassAngle, compassAngleValue, getCompass
 });
 
 export default MapDisplayScreen;
+
+// ── Google Street View-Style Transition Overlay ──────────────────────────────
+// Shows expanding ripple rings + directional chevrons when navigating 360 views.
+const StreetViewTransition = React.memo(({ direction, ripple1, ripple2, ripple3,
+  rippleOpacity1, rippleOpacity2, rippleOpacity3, arrowPulse, vignetteOpacity }) => {
+
+  const isForward = direction > 0;
+
+  // Scale each ripple ring from 0.2x to 2.5x its base size
+  const rippleBase = 120;
+  const makeRippleStyle = (anim, opacityAnim) => ({
+    transform: [{
+      scale: anim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0.2, 2.5],
+      }),
+    }],
+    opacity: opacityAnim,
+  });
+
+  // Chevron characters: show 2 for forward, 2 for backward
+  const chevrons = isForward ? ['›', '›', '›'] : ['‹', '‹', '‹'];
+
+  return (
+    <View style={styles.svTransitionContainer} pointerEvents="none">
+      {/* Dark vignette pulse */}
+      <Animated.View style={[styles.svVignette, { opacity: vignetteOpacity }]} />
+
+      {/* Ripple rings */}
+      <Animated.View style={[styles.svRipple, makeRippleStyle(ripple1, rippleOpacity1)]} />
+      <Animated.View style={[styles.svRipple, makeRippleStyle(ripple2, rippleOpacity2)]} />
+      <Animated.View style={[styles.svRipple, makeRippleStyle(ripple3, rippleOpacity3)]} />
+
+      {/* Directional arrow cluster */}
+      <Animated.View style={[styles.svArrowContainer, { transform: [{ scale: arrowPulse }] }]}>
+        <View style={{ flexDirection: isForward ? 'column' : 'column-reverse', alignItems: 'center' }}>
+          {chevrons.map((ch, i) => (
+            <Text
+              key={i}
+              style={[
+                styles.svChevron,
+                {
+                  opacity: 1 - i * 0.25,
+                  transform: [{ rotate: isForward ? '270deg' : '90deg' }],
+                  fontSize: 36 - i * 4,
+                },
+              ]}
+            >
+              {ch}
+            </Text>
+          ))}
+        </View>
+        <Text style={styles.svLabel}>{isForward ? 'MOVING FORWARD' : 'GOING BACK'}</Text>
+      </Animated.View>
+    </View>
+  );
+});

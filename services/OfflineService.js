@@ -202,8 +202,9 @@ class OfflineService {
   }
 
   /**
-   * Get image URL - returns local path if cached, otherwise remote URL
-   * ALWAYS prefers cached version if available, even when online
+   * Get image URL - returns local path if cached AND up-to-date, otherwise remote URL.
+   * If the server's image URL has changed since the image was cached, the stale local
+   * file is deleted so the fresh remote image is fetched instead.
    */
   async getImageUrl(node) {
     // Handle both image360_url and image360 property names
@@ -211,17 +212,34 @@ class OfflineService {
     if (!node || !imageUrl) return null;
     
     try {
-      // Always check for cached image first, regardless of online/offline status
       const localFile = this.getLocal360ImagePath(node.node_id);
       
       if (localFile.exists) {
-        console.log(`📦 Using cached image for node ${node.node_id}: ${localFile.uri}`);
-        return localFile.uri;
+        // Check whether the cached image matches the current remote URL.
+        // We store the URL that was used to download the cached image in AsyncStorage.
+        const cachedUrlKey = `@cached_image_url_${node.node_id}`;
+        const cachedUrl = await AsyncStorage.getItem(cachedUrlKey);
+
+        if (cachedUrl === imageUrl) {
+          // Cache is fresh and matches the server URL — use it
+          console.log(`📦 Using cached image for node ${node.node_id}: ${localFile.uri}`);
+          return localFile.uri;
+        } else {
+          // The server image URL changed (updated) — delete the stale cached file
+          console.log(`🔄 Image updated for node ${node.node_id}, clearing stale cache`);
+          try {
+            localFile.delete();
+          } catch (deleteErr) {
+            console.warn(`Could not delete stale cache for node ${node.node_id}:`, deleteErr.message);
+          }
+          await AsyncStorage.removeItem(cachedUrlKey);
+          // Fall through to return the fresh remote URL
+        }
       } else {
         console.log(`🌐 No cache for node ${node.node_id}, using remote: ${imageUrl}`);
       }
       
-      // Fall back to remote URL if not cached
+      // Fall back to remote URL if not cached or cache was stale
       return imageUrl;
     } catch (error) {
       console.error('Error checking cached image:', error);
@@ -257,8 +275,11 @@ class OfflineService {
 
   /**
    * Download a single image
+   * @param {string} url - Remote URL to download
+   * @param {string} filename - Local filename to save as
+   * @param {number|string} [nodeId] - Node ID, used to record which URL is cached for cache-busting
    */
-  async downloadImage(url, filename) {
+  async downloadImage(url, filename, nodeId) {
     try {
       if (!url) {
         console.warn('No URL provided for image download');
@@ -300,6 +321,12 @@ class OfflineService {
       
       // Write to file
       await localFile.write(bytes);
+      
+      // Record the URL that was cached so we can detect future updates
+      if (nodeId !== undefined && nodeId !== null) {
+        const cachedUrlKey = `@cached_image_url_${nodeId}`;
+        await AsyncStorage.setItem(cachedUrlKey, url);
+      }
       
       console.log(`✅ Downloaded: ${filename} (${(bytes.length / 1024 / 1024).toFixed(2)} MB)`);
       return true;
@@ -691,7 +718,7 @@ class OfflineService {
         // Check if already cached
         if (!localFile.exists) {
           console.log(`  Downloading node ${node.node_id}: ${node.name}`);
-          const success = await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`);
+          const success = await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`, node.node_id);
           if (!success) {
             console.warn(`  ⚠️ Failed to download image for node ${node.node_id}`);
           }
@@ -867,7 +894,7 @@ class OfflineService {
           completedItems: i + 2,
         });
 
-        await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`);
+        await this.downloadImage(imageUrl, `node_${node.node_id}.jpg`, node.node_id);
       }
 
       await AsyncStorage.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
@@ -1095,7 +1122,7 @@ class OfflineService {
         console.log(`  🔮 Predownloading neighbor ${neighborId}`);
         
         // Fire and forget (but handle promise locally)
-        this.downloadImage(imageUrl, `node_${neighborId}.jpg`)
+        this.downloadImage(imageUrl, `node_${neighborId}.jpg`, neighborId)
           .then(success => {
             if (success) console.log(`  ✅ Predictive download complete: ${neighborId}`);
           })

@@ -148,7 +148,11 @@ const EdgeFormScreen = ({ route, navigation }) => {
       }
     } catch (error) {
       console.error('Submit error:', error);
-      Alert.alert('Error', error.error || error.message || 'Failed to save edge');
+      if (error.sessionExpired || error.error === 'Session expired') {
+        Alert.alert('Session Expired', 'Your session has expired. Please log in again.');
+      } else {
+        Alert.alert('Error', error.error || error.message || 'Failed to save edge');
+      }
     } finally {
       setLoading(false);
     }
@@ -636,7 +640,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   infoBox: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: '#F5E6E6',
     borderRadius: 10,
     padding: 15,
     marginBottom: 20,
@@ -732,7 +736,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   nodeItemSelected: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: '#F5E6E6',
     borderWidth: 2,
     borderColor: THEME_COLORS.primary,
   },

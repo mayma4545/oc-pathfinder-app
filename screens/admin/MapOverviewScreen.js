@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  Image,
   ScrollView,
   TouchableOpacity,
   Modal,
@@ -20,6 +19,8 @@ import ApiService from '../../services/ApiService';
 import SvgMap from '../../components/SvgMap';
 import { transformCoordinate } from '../../utils/MapCoordinateUtils';
 import CalibrationOverlay from '../../components/CalibrationOverlay';
+import { useFocusEffect } from '@react-navigation/native';
+import { Image as ExpoImage } from 'expo-image';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -29,6 +30,7 @@ const MapOverviewScreen = ({ navigation }) => {
   const [campusMap, setCampusMap] = useState(null);
   const [loading, setLoading] = useState(true);
   const [mapDimensions, setMapDimensions] = useState({ width: 0, height: 0 });
+  const [imageRefreshNonce, setImageRefreshNonce] = useState(Date.now());
   const [selectedNode, setSelectedNode] = useState(null);
   const [showNodeModal, setShowNodeModal] = useState(false);
   const [nodeNeighbors, setNodeNeighbors] = useState([]);
@@ -48,22 +50,63 @@ const MapOverviewScreen = ({ navigation }) => {
   const lastPanX = useRef(0);
   const lastPanY = useRef(0);
 
+  useFocusEffect(
+    useCallback(() => {
+      // Clear expo-image memory and disk cache BEFORE loading data so stale entries
+      // are guaranteed gone before new URLs are rendered.
+      const refresh = async () => {
+        try {
+          await Promise.all([
+            ExpoImage.clearMemoryCache(),
+            ExpoImage.clearDiskCache(),
+          ]);
+        } catch (_) {
+          // ignore – best effort
+        }
+        loadData();
+      };
+      refresh();
+    }, [])
+  );
+
+  // Keep the selected-node modal in sync: when nodes are refreshed (e.g. after an edit),
+  // replace the stale selectedNode snapshot with the latest data so the image and details
+  // shown in the modal are always up-to-date.
   useEffect(() => {
-    loadData();
-  }, []);
+    if (selectedNode && nodes.length > 0) {
+      const refreshed = nodes.find((n) => n.node_id === selectedNode.node_id);
+      if (refreshed) {
+        setSelectedNode(refreshed);
+        setNodeNeighbors(getNodeNeighbors(refreshed.node_id));
+      }
+    }
+  }, [nodes]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [nodesRes, edgesRes, mapRes] = await Promise.all([
-        ApiService.getNodes(),
+      const [nodesRes, edgesRes, mapRes] = await Promise.allSettled([
+        ApiService.getNodes({ _ts: Date.now() }),
         ApiService.getEdges(),
         ApiService.getCampusMap(),
       ]);
 
-      if (nodesRes.success) setNodes(nodesRes.nodes || []);
-      if (edgesRes.success) setEdges(edgesRes.edges || []);
-      if (mapRes.success && mapRes.map) setCampusMap(mapRes.map);
+      if (nodesRes.status === 'fulfilled' && nodesRes.value?.success) {
+        const freshNodes = (nodesRes.value.nodes || []).map((n) => {
+          const imageUrl = n.image360_url || n.image360 || null;
+          return { ...n, image360_url: imageUrl, image360: imageUrl, has_360_image: !!imageUrl };
+        });
+        setNodes(freshNodes);
+        setImageRefreshNonce(Date.now());
+      }
+
+      if (edgesRes.status === 'fulfilled' && edgesRes.value?.success) {
+        setEdges(edgesRes.value.edges || []);
+      }
+
+      if (mapRes.status === 'fulfilled' && mapRes.value?.success && mapRes.value.map) {
+        setCampusMap(mapRes.value.map);
+      }
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -188,14 +231,30 @@ const MapOverviewScreen = ({ navigation }) => {
 
   const getNodeColor = (node) => {
     switch (node.type_of_node) {
-      case 'entrance': return '#4CAF50';
-      case 'staircase': return '#FF9800';
-      case 'elevator': return '#9C27B0';
-      case 'hallway': return '#2196F3';
-      case 'room': return '#E91E63';
-      case 'landmark': return '#F44336';
+      case 'entrance': return '#2E7D32';
+      case 'staircase': return '#E65100';
+      case 'elevator': return '#6A1B9A';
+      case 'hallway': return '#D4A843';
+      case 'room': return '#800000';
+      case 'landmark': return '#C62828';
       default: return THEME_COLORS.primary;
     }
+  };
+
+  const getNodeImageUrl = (node) => {
+    if (!node) return null;
+    const rawUrl = node.image360_url || node.image360 || null;
+    if (!rawUrl) return null;
+    if (!String(rawUrl).startsWith('http://') && !String(rawUrl).startsWith('https://')) {
+      return rawUrl;
+    }
+    const separator = rawUrl.includes('?') ? '&' : '?';
+    return `${rawUrl}${separator}cb=${imageRefreshNonce}`;
+  };
+
+  const hasNodeImage = (node) => {
+    const imageUrl = getNodeImageUrl(node);
+    return !!(imageUrl && String(imageUrl).trim() !== '');
   };
 
   const renderMapOverlay = () => {
@@ -248,7 +307,7 @@ const MapOverviewScreen = ({ navigation }) => {
               y1={y1}
               x2={x2}
               y2={y2}
-              stroke="rgba(0, 150, 255, 0.5)"
+              stroke="rgba(128, 0, 0, 0.5)"
               strokeWidth={Math.max(0.5, 2 / currentZoom)}
             />
           );
@@ -264,7 +323,7 @@ const MapOverviewScreen = ({ navigation }) => {
           return (
             <React.Fragment key={node.node_id}>
               {/* Glow effect for nodes with 360 images */}
-              {node.image360_url && (
+              {hasNodeImage(node) && (
                 <Circle
                   cx={x}
                   cy={y}
@@ -330,13 +389,14 @@ const MapOverviewScreen = ({ navigation }) => {
               <Text style={styles.modalNodeCode}>{selectedNode.node_code}</Text>
 
               {/* 360 Image */}
-              {selectedNode.image360_url && (
+              {hasNodeImage(selectedNode) && (
                 <View style={styles.imageContainer}>
                   <Text style={styles.sectionTitle}>📷 360° Image</Text>
-                  <Image
-                    source={{ uri: selectedNode.image360_url }}
+                  <ExpoImage
+                    source={{ uri: getNodeImageUrl(selectedNode) }}
                     style={styles.nodeImage}
-                    resizeMode="cover"
+                    contentFit="cover"
+                    cachePolicy="none"
                   />
                 </View>
               )}
@@ -389,7 +449,7 @@ const MapOverviewScreen = ({ navigation }) => {
                     >
                       <View style={styles.neighborHeader}>
                         <View style={[styles.directionBadge, { 
-                          backgroundColor: neighbor.direction === 'outgoing' ? '#4CAF50' : '#2196F3' 
+                          backgroundColor: neighbor.direction === 'outgoing' ? '#2E7D32' : '#800000' 
                         }]}>
                           <Text style={styles.directionBadgeText}>
                             {neighbor.direction === 'outgoing' ? '→ To' : '← From'}
@@ -427,7 +487,7 @@ const MapOverviewScreen = ({ navigation }) => {
                         )}
                       </View>
                       
-                      {neighbor.node.image360_url && (
+                      {hasNodeImage(neighbor.node) && (
                         <View style={styles.has360Badge}>
                           <Text style={styles.has360BadgeText}>📷 Has 360°</Text>
                         </View>
@@ -501,7 +561,7 @@ const MapOverviewScreen = ({ navigation }) => {
           <Text style={styles.statLabel}>Edges</Text>
         </View>
         <View style={styles.statItem}>
-          <Text style={styles.statValue}>{nodes.filter(n => n.image360_url).length}</Text>
+          <Text style={styles.statValue}>{nodes.filter((n) => hasNodeImage(n)).length}</Text>
           <Text style={styles.statLabel}>360° Images</Text>
         </View>
       </View>
@@ -509,19 +569,19 @@ const MapOverviewScreen = ({ navigation }) => {
       {/* Legend */}
       <View style={styles.legend}>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: '#E91E63' }]} />
+          <View style={[styles.legendDot, { backgroundColor: '#800000' }]} />
           <Text style={styles.legendText}>Room</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: '#2196F3' }]} />
+          <View style={[styles.legendDot, { backgroundColor: '#D4A843' }]} />
           <Text style={styles.legendText}>Hallway</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: '#4CAF50' }]} />
+          <View style={[styles.legendDot, { backgroundColor: '#2E7D32' }]} />
           <Text style={styles.legendText}>Entrance</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: '#FF9800' }]} />
+          <View style={[styles.legendDot, { backgroundColor: '#E65100' }]} />
           <Text style={styles.legendText}>Stairs</Text>
         </View>
         <View style={styles.legendItem}>
@@ -624,14 +684,14 @@ const MapOverviewScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1A1A2E',
+    backgroundColor: '#1F0F0F',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 15,
-    backgroundColor: '#16213E',
+    backgroundColor: '#2D1114',
   },
   backButton: {
     color: '#FFFFFF',
@@ -644,7 +704,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   refreshButton: {
-    color: '#4CAF50',
+    color: '#D4A843',
     fontSize: 24,
     fontWeight: 'bold',
   },
@@ -652,7 +712,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     padding: 10,
-    backgroundColor: '#0F3460',
+    backgroundColor: '#3D1518',
   },
   statItem: {
     alignItems: 'center',
@@ -660,7 +720,7 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#4CAF50',
+    color: '#D4A843',
   },
   statLabel: {
     fontSize: 11,
@@ -671,7 +731,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'center',
     padding: 8,
-    backgroundColor: '#16213E',
+    backgroundColor: '#2D1114',
     gap: 10,
   },
   legendItem: {
@@ -693,18 +753,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 8,
-    backgroundColor: '#0F3460',
+    backgroundColor: '#3D1518',
     gap: 10,
   },
   zoomButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#16213E',
+    backgroundColor: '#2D1114',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#4CAF50',
+    borderColor: '#D4A843',
   },
   zoomButtonText: {
     fontSize: 20,
@@ -721,20 +781,20 @@ const styles = StyleSheet.create({
   zoomResetButton: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: '#16213E',
+    backgroundColor: '#2D1114',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#4CAF50',
+    borderColor: '#D4A843',
   },
   zoomResetText: {
     fontSize: 11,
-    color: '#4CAF50',
+    color: '#D4A843',
     fontWeight: '600',
   },
   mapClipContainer: {
     flex: 1,
     overflow: 'hidden',
-    backgroundColor: '#0A0A1A',
+    backgroundColor: '#0A0505',
   },
   gestureContainer: {
     flex: 1,
@@ -785,7 +845,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#1A1A2E',
+    backgroundColor: '#1F0F0F',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: SCREEN_HEIGHT * 0.85,
@@ -796,7 +856,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#0F3460',
+    borderBottomColor: '#3D1518',
   },
   nodeTypeBadge: {
     paddingHorizontal: 12,
@@ -813,7 +873,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#0F3460',
+    backgroundColor: '#3D1518',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -833,7 +893,7 @@ const styles = StyleSheet.create({
   },
   modalNodeCode: {
     fontSize: 14,
-    color: '#4CAF50',
+    color: '#D4A843',
     marginBottom: 15,
     fontFamily: 'monospace',
   },
@@ -850,10 +910,10 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 180,
     borderRadius: 10,
-    backgroundColor: '#0F3460',
+    backgroundColor: '#3D1518',
   },
   detailsContainer: {
-    backgroundColor: '#16213E',
+    backgroundColor: '#2D1114',
     borderRadius: 12,
     padding: 15,
     marginBottom: 20,
@@ -863,7 +923,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#0F3460',
+    borderBottomColor: '#3D1518',
   },
   detailLabel: {
     fontSize: 14,
@@ -894,12 +954,12 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   neighborCard: {
-    backgroundColor: '#16213E',
+    backgroundColor: '#2D1114',
     borderRadius: 12,
     padding: 15,
     marginBottom: 10,
     borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+    borderLeftColor: '#D4A843',
   },
   neighborHeader: {
     flexDirection: 'row',
@@ -935,7 +995,7 @@ const styles = StyleSheet.create({
   },
   neighborCode: {
     fontSize: 12,
-    color: '#4CAF50',
+    color: '#D4A843',
     fontFamily: 'monospace',
     marginBottom: 10,
   },

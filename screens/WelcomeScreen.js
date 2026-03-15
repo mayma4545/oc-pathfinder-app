@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,7 +7,6 @@ import ApiService from '../services/ApiService';
 import OfflineService from '../services/OfflineService';
 
 const WelcomeScreen = ({ navigation }) => {
-  const timerRef = useRef(null);
   const [connectionStatus, setConnectionStatus] = useState({
     checking: true,
     connected: false,
@@ -63,10 +62,7 @@ const WelcomeScreen = ({ navigation }) => {
           offlineAvailable: false,
         });
 
-        // Auto-navigate after 2 seconds if connected
-        timerRef.current = setTimeout(() => {
-          navigation.replace('PointSelection');
-        }, 2000);
+
       } else {
         // Offline mode detected
         await handleOfflineMode();
@@ -93,10 +89,6 @@ const WelcomeScreen = ({ navigation }) => {
   };
 
   const handleGetStarted = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-    
     if (!connectionStatus.canContinue) {
       return;
     }
@@ -105,15 +97,12 @@ const WelcomeScreen = ({ navigation }) => {
   };
 
   const handleAdminLogin = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
     navigation.navigate('Login');
   };
 
   return (
     <LinearGradient
-      colors={[THEME_COLORS.primary, THEME_COLORS.secondary]}
+      colors={[THEME_COLORS.primary, THEME_COLORS.primary]}
       style={styles.container}
     >
       <View style={styles.content}>

@@ -423,7 +423,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   progressCard: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: '#F5E6E6',
     borderRadius: 12,
     padding: 16,
     marginBottom: 20,
@@ -441,7 +441,7 @@ const styles = StyleSheet.create({
   },
   progressBar: {
     height: 8,
-    backgroundColor: '#BBDEFB',
+    backgroundColor: '#E8CCCC',
     borderRadius: 4,
     overflow: 'hidden',
   },

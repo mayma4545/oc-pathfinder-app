@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,9 @@ import {
   ScrollView,
   ActivityIndicator,
   Switch,
+  Animated,
+  PanResponder,
+  Dimensions,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,6 +25,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useDownload } from '../contexts/DownloadContext';
 import SyncManager from '../services/SyncManager';
 import OfflineService from '../services/OfflineService';
+import { Image as ExpoImage } from 'expo-image';
+import { getOptimizedImageUrl } from '../utils/ImageOptimizer';
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const PointSelectionScreen = ({ navigation }) => {
   const { isAdmin, login } = useAuth();
@@ -36,6 +43,8 @@ const PointSelectionScreen = ({ navigation }) => {
   const [selectingType, setSelectingType] = useState(null); // 'start' or 'end'
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  // Incremented every time the screen comes into focus to bust image caches
+  const [nodeDataVersion, setNodeDataVersion] = useState(0);
 
   // Admin login modal
   const [adminModalVisible, setAdminModalVisible] = useState(false);
@@ -52,6 +61,16 @@ const PointSelectionScreen = ({ navigation }) => {
   const [offlineDataAvailable, setOfflineDataAvailable] = useState(false);
   const [forceOfflineMode, setForceOfflineMode] = useState(false); // Manual offline mode toggle
 
+  // 360° Preview state
+  const [show360PreviewModal, setShow360PreviewModal] = useState(false);
+  const [preview360Node, setPreview360Node] = useState(null);
+  const [preview360ImageUrl, setPreview360ImageUrl] = useState(null);
+  const [baseScale360, setBaseScale360] = useState(1);
+  // 360° animated pan/zoom values
+  const pan360X = useRef(new Animated.Value(0)).current;
+  const scale360 = useRef(new Animated.Value(1)).current;
+  const lastPanX360 = useRef(0);
+
   useEffect(() => {
     loadImageQualitySetting();
     checkOfflineData();
@@ -64,6 +83,98 @@ const PointSelectionScreen = ({ navigation }) => {
 
     return () => unsubscribe();
   }, []);
+
+  // Helper: check if a node has a 360° image
+  const hasImage360 = useCallback((node) => {
+    return !!(node && (node.image360 || node.image360_url));
+  }, []);
+
+  // Pan responder for 360° preview — seamless infinite loop identical to MapDisplayScreen
+  const panResponder360 = useMemo(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        pan360X.setOffset(lastPanX360.current);
+        pan360X.setValue(0);
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const sensitivity = 4;
+        pan360X.setValue(gestureState.dx * sensitivity);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const sensitivity = 4;
+        const imageWidth = SCREEN_HEIGHT * 6;
+        lastPanX360.current += gestureState.dx * sensitivity;
+        // Wrap to middle copy for seamless looping — same logic as MapDisplayScreen
+        if (lastPanX360.current > -imageWidth / 2) {
+          lastPanX360.current -= imageWidth;
+          pan360X.setOffset(lastPanX360.current);
+        } else if (lastPanX360.current < -imageWidth * 1.5) {
+          lastPanX360.current += imageWidth;
+          pan360X.setOffset(lastPanX360.current);
+        }
+        pan360X.flattenOffset();
+      },
+      onPanResponderTerminate: () => {
+        pan360X.flattenOffset();
+      },
+    })
+  , [pan360X]);
+
+  const zoomIn360 = () => {
+    const newScale = Math.min(baseScale360 + 0.5, 5);
+    setBaseScale360(newScale);
+    Animated.spring(scale360, { toValue: newScale, useNativeDriver: false, friction: 7 }).start();
+  };
+
+  const zoomOut360 = () => {
+    const newScale = Math.max(baseScale360 - 0.2, 0.8);
+    setBaseScale360(newScale);
+    Animated.spring(scale360, { toValue: newScale, useNativeDriver: false, friction: 7 }).start();
+  };
+
+  const resetZoom360 = () => {
+    setBaseScale360(1);
+    Animated.spring(scale360, { toValue: 1, useNativeDriver: false, friction: 7 }).start();
+  };
+
+  // Open the 360° preview for a node — uses cached image if available
+  const openPreview360 = useCallback(async (node) => {
+    setPreview360Node(node);
+    // Start centered on the middle copy (offset = -imageWidth)
+    const imageWidth = SCREEN_HEIGHT * 6;
+    lastPanX360.current = -imageWidth;
+    pan360X.setValue(-imageWidth);
+    scale360.setValue(1);
+    setBaseScale360(1);
+    setPreview360ImageUrl(null);
+    setShow360PreviewModal(true);
+    try {
+      const remoteUrl = node.image360 || node.image360_url;
+      if (!remoteUrl) return;
+      const cachedUrl = await OfflineService.getImageUrl({
+        node_id: node.node_id,
+        image360: remoteUrl,
+        image360_url: remoteUrl,
+      });
+      if (cachedUrl && cachedUrl.startsWith('file://')) {
+        setPreview360ImageUrl(cachedUrl);
+      } else {
+        const optimizedUrl = getOptimizedImageUrl(remoteUrl, imageQuality);
+        const separator = optimizedUrl.includes('?') ? '&' : '?';
+        setPreview360ImageUrl(`${optimizedUrl}${separator}cb=${Date.now()}`);
+      }
+    } catch (error) {
+      console.error('Error loading 360 preview:', error);
+      const remoteUrl = node.image360 || node.image360_url;
+      if (remoteUrl) {
+        const optimizedUrl = getOptimizedImageUrl(remoteUrl, imageQuality);
+        const separator = optimizedUrl.includes('?') ? '&' : '?';
+        setPreview360ImageUrl(`${optimizedUrl}${separator}cb=${Date.now()}`);
+      }
+    }
+  }, [imageQuality, pan360X, scale360]);
 
   const checkFirstRun = async () => {
     try {
@@ -104,21 +215,32 @@ const PointSelectionScreen = ({ navigation }) => {
   // Reload data when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      loadNodesAndEvents();
+      // Clear expo-image memory and disk cache BEFORE loading data so stale entries
+      // are guaranteed gone before new URLs are rendered.
+      const refresh = async () => {
+        try {
+          await Promise.all([
+            ExpoImage.clearMemoryCache(),
+            ExpoImage.clearDiskCache(),
+          ]);
+        } catch (_) {
+          // ignore – best effort
+        }
+        setNodeDataVersion(v => v + 1);
+        loadNodesAndEvents();
+      };
+      refresh();
     }, [])
   );
 
   useEffect(() => {
     // Use combined search for events and nodes
     const performSearch = async () => {
-      // Define searchable node types (only rooms, offices, restrooms)
-      const nonSearchableTypes = ['junction', 'staircase', 'hallway', 'entrance', 'exit', 'elevator', 'directory', 'landmark'];
-      
       if (searchQuery.trim() === '') {
-        // Filter out non-searchable nodes and nodes with building "none"
+        // Only show room-type nodes with a valid building
         const searchableNodes = nodes.filter(
-          (node) => !nonSearchableTypes.includes(node.node_type) && 
-                    node.building && 
+          (node) => node.type_of_node === 'room' &&
+                    node.building &&
                     node.building.toLowerCase() !== 'none'
         );
         setFilteredNodes(searchableNodes);
@@ -130,10 +252,19 @@ const PointSelectionScreen = ({ navigation }) => {
         const results = await ApiService.combinedSearch(searchQuery);
         if (results.success) {
           setFilteredEvents(results.events || []);
-          // Filter out non-searchable nodes and nodes with building "none" from API results
-          const searchableNodes = (results.nodes || []).filter(
-            (node) => !nonSearchableTypes.includes(node.node_type) && 
-                      node.building && 
+          const normalizedSearchNodes = (results.nodes || []).map((node) => {
+            const imageUrl = node.image360_url || node.image360 || null;
+            return {
+              ...node,
+              image360_url: imageUrl,
+              image360: imageUrl,
+              has_360_image: !!imageUrl,
+            };
+          });
+          // Only show room-type nodes with a valid building from API results
+          const searchableNodes = normalizedSearchNodes.filter(
+            (node) => node.type_of_node === 'room' &&
+                      node.building &&
                       node.building.toLowerCase() !== 'none'
           );
           setFilteredNodes(searchableNodes);
@@ -143,8 +274,8 @@ const PointSelectionScreen = ({ navigation }) => {
         // Fallback to local filtering of nodes and events
         const filteredNodesLocal = nodes.filter(
           (node) =>
-            // Exclude non-searchable types and building "none"
-            !nonSearchableTypes.includes(node.node_type) &&
+            // Only include room-type nodes with a valid building
+            node.type_of_node === 'room' &&
             node.building &&
             node.building.toLowerCase() !== 'none' &&
             (node.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -170,11 +301,27 @@ const PointSelectionScreen = ({ navigation }) => {
       setLoading(true);
       
       // Load nodes
-      const response = await ApiService.getNodes();
+      const response = await ApiService.getNodes({ _ts: Date.now() });
       console.log('Nodes response:', response);
       if (response.success) {
-        setNodes(response.nodes);
-        setFilteredNodes(response.nodes);
+        const normalizedNodes = (response.nodes || []).map((node) => {
+          const imageUrl = node.image360_url || node.image360 || null;
+          return {
+            ...node,
+            image360_url: imageUrl,
+            image360: imageUrl,
+            has_360_image: !!imageUrl,
+          };
+        });
+
+        setNodes(normalizedNodes);
+        // Pre-filter to room nodes with a valid building (matching the useEffect filter)
+        const roomNodes = normalizedNodes.filter(
+          (n) => n.type_of_node === 'room' &&
+                  n.building &&
+                  n.building.toLowerCase() !== 'none'
+        );
+        setFilteredNodes(roomNodes);
       } else {
         console.error('Failed to load nodes:', response);
         Alert.alert('Error', response.error || 'Failed to load nodes');
@@ -344,6 +491,15 @@ const PointSelectionScreen = ({ navigation }) => {
             {item.building} • Floor {item.floor_level} • {item.node_code}
           </Text>
         </View>
+        {hasImage360(item) && (
+          <TouchableOpacity
+            style={styles.previewEyeButton}
+            onPress={() => openPreview360(item)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.previewEyeIcon}>👁️</Text>
+          </TouchableOpacity>
+        )}
         <Text style={styles.selectIcon}>›</Text>
       </TouchableOpacity>
     );
@@ -418,7 +574,10 @@ const PointSelectionScreen = ({ navigation }) => {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleTitleTap} activeOpacity={1}>
+        <TouchableOpacity style={styles.headerBackBtn} onPress={() => navigation.navigate('Welcome')}>
+          <Text style={styles.headerBackBtnText}>‹</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={handleTitleTap} activeOpacity={1} style={styles.headerTitleContainer}>
           <Text style={styles.headerTitle}>Find Your Way</Text>
           {!isConnected && (
             <Text style={styles.offlineIndicator}>
@@ -598,6 +757,73 @@ const PointSelectionScreen = ({ navigation }) => {
               }
             />
           </View>
+        </View>
+      </Modal>
+
+      {/* 360° Image Preview Modal */}
+      <Modal
+        visible={show360PreviewModal}
+        animationType="fade"
+        onRequestClose={() => setShow360PreviewModal(false)}
+        statusBarTranslucent
+      >
+        <View style={styles.modal360Fullscreen}>
+          {preview360Node && (
+            <>
+              {/* Swipeable 360° panoramic image — three copies for seamless loop */}
+              <View style={{ flex: 1, overflow: 'hidden' }} {...panResponder360.panHandlers}>
+                <Animated.View
+                  style={{
+                    flexDirection: 'row',
+                    height: SCREEN_HEIGHT,
+                    transform: [{ translateX: pan360X }, { scale: scale360 }],
+                  }}
+                >
+                  <Image360PreviewPart imageUrl={preview360ImageUrl} />
+                  <Image360PreviewPart imageUrl={preview360ImageUrl} />
+                  <Image360PreviewPart imageUrl={preview360ImageUrl} />
+                </Animated.View>
+              </View>
+
+              {/* Loading indicator */}
+              {!preview360ImageUrl && (
+                <View style={styles.preview360Loading}>
+                  <ActivityIndicator size="large" color="#FFFFFF" />
+                  <Text style={styles.preview360LoadingText}>Loading 360° image...</Text>
+                </View>
+              )}
+
+              {/* Zoom Controls */}
+              <View style={styles.zoomControls360}>
+                <TouchableOpacity style={styles.zoom360Button} onPress={zoomIn360}>
+                  <Text style={styles.zoom360ButtonText}>+</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.zoom360Button} onPress={resetZoom360}>
+                  <Text style={styles.zoom360ButtonTextSmall}>Reset</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.zoom360Button} onPress={zoomOut360}>
+                  <Text style={styles.zoom360ButtonText}>−</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Location Info Overlay */}
+              <View style={styles.preview360Info} pointerEvents="none">
+                <Text style={styles.preview360NodeName}>{preview360Node.name}</Text>
+                <Text style={styles.preview360NodeDetails}>
+                  {preview360Node.building} • Floor {preview360Node.floor_level}
+                </Text>
+                <Text style={styles.preview360Hint}>← Swipe left/right to explore →</Text>
+              </View>
+
+              {/* Close Button */}
+              <TouchableOpacity
+                style={styles.close360PreviewButton}
+                onPress={() => setShow360PreviewModal(false)}
+              >
+                <Text style={styles.close360PreviewButtonText}>✕</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </Modal>
 
@@ -1042,6 +1268,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#FFFFFF',
+    textAlign: 'center',
   },
   offlineIndicator: {
     fontSize: 12,
@@ -1449,12 +1676,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   progressContainer: {
-    backgroundColor: '#F0F7FF',
+    backgroundColor: '#FFF5F5',
     borderRadius: 12,
     padding: 16,
     marginVertical: 12,
     borderWidth: 1,
-    borderColor: '#E0E8F0',
+    borderColor: '#E8D8D8',
   },
   progressHeader: {
     flexDirection: 'row',
@@ -1564,7 +1791,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   updateButton: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: '#F5E6E6',
     padding: 14,
     borderRadius: 10,
     alignItems: 'center',
@@ -1636,6 +1863,152 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontWeight: '500',
   },
+  // Back button in header
+  headerBackBtn: {
+    width: 38,
+    height: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    marginRight: 4,
+  },
+  headerBackBtnText: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    fontWeight: '300',
+    lineHeight: 34,
+    marginTop: -2,
+  },
+  headerTitleContainer: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  // Eye preview button on node search results
+  previewEyeButton: {
+    width: 38,
+    height: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(63, 81, 181, 0.08)',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: THEME_COLORS.primary,
+    marginRight: 8,
+  },
+  previewEyeIcon: {
+    fontSize: 18,
+  },
+  // 360° Preview Modal
+  modal360Fullscreen: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  zoomControls360: {
+    position: 'absolute',
+    right: 20,
+    top: '35%',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 30,
+    padding: 10,
+    gap: 10,
+  },
+  zoom360Button: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  zoom360ButtonText: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  zoom360ButtonTextSmall: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  preview360Loading: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+  },
+  preview360LoadingText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    marginTop: 15,
+    fontWeight: '600',
+  },
+  preview360Info: {
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 90,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    padding: 18,
+    borderRadius: 14,
+  },
+  preview360NodeName: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 4,
+  },
+  preview360NodeDetails: {
+    fontSize: 14,
+    color: '#CCCCCC',
+    marginBottom: 8,
+  },
+  preview360Hint: {
+    fontSize: 13,
+    color: '#E0A0A0',
+    fontStyle: 'italic',
+  },
+  close360PreviewButton: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  close360PreviewButtonText: {
+    fontSize: 28,
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+});
+
+// Memoized 360° image part for seamless panoramic wrapping
+const Image360PreviewPart = React.memo(({ imageUrl }) => {
+  if (!imageUrl) {
+    return <View style={{ width: SCREEN_HEIGHT * 6, height: SCREEN_HEIGHT, backgroundColor: '#111' }} />;
+  }
+  return (
+    <ExpoImage
+      source={{ uri: imageUrl }}
+      style={{ width: SCREEN_HEIGHT * 6, height: SCREEN_HEIGHT }}
+      contentFit="cover"
+      cachePolicy="none"
+      priority="high"
+      transition={0}
+    />
+  );
 });
 
 export default PointSelectionScreen;

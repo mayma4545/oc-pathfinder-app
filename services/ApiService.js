@@ -4,7 +4,26 @@ import { API_BASE_URL, API_ENDPOINTS } from '../config';
 import OfflineService from './OfflineService';
 import { isNetworkError } from '../utils/networkUtils';
 
-// Create axios instance
+// Generate a UUID v4 string with no external dependencies
+const generateUUID = () =>
+  'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+
+// Get or create a unique, persistent install ID for this app installation.
+// Stored in AsyncStorage so it survives app restarts but is unique per install.
+const getInstallId = async () => {
+  let id = await AsyncStorage.getItem('appInstallId');
+  if (!id) {
+    id = generateUUID();
+    await AsyncStorage.setItem('appInstallId', id);
+  }
+  return id;
+};
+
+// Public / read-only requests — 5 s timeout is fine (no large payloads)
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 5000,
@@ -13,41 +32,71 @@ const api = axios.create({
   },
 });
 
-// Request interceptor to add auth token
-api.interceptors.request.use(
-  async (config) => {
-    const token = await AsyncStorage.getItem('authToken');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
+// Admin mutation requests — 30 s timeout to handle base64 image uploads on slow networks
+const adminApi = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
   },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
+});
+
+// Attach auth token + unique install ID to every request for both instances
+const attachRequestInterceptor = (instance) => {
+  instance.interceptors.request.use(
+    async (config) => {
+      const [token, installId] = await Promise.all([
+        AsyncStorage.getItem('authToken'),
+        getInstallId(),
+      ]);
+      if (token) config.headers.Authorization = `Bearer ${token}`;
+      // Rate limiter uses this to apply 5 req/sec per install (not per IP)
+      config.headers['X-App-Install-ID'] = installId;
+      return config;
+    },
+    (error) => Promise.reject(error),
+  );
+};
+
+attachRequestInterceptor(api);
+attachRequestInterceptor(adminApi);
 
 // Response interceptor for error handling
 let logoutCallback = null;
+// Guard against duplicate logout calls when multiple concurrent requests all get 401
+// (e.g. two requests in-flight when the token expires simultaneously)
+let isLoggingOut = false;
 
-api.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    if (error.response?.status === 401) {
-      // Clear token on unauthorized
-      await AsyncStorage.multiRemove(['authToken', 'user', 'isAdmin']);
-      if (logoutCallback) {
-        logoutCallback();
+// Attach response interceptor to both api and adminApi
+const attachResponseInterceptor = (instance) => {
+  instance.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      if (error.response?.status === 401) {
+        const serverError = error.response.data || {};
+        // Tag the error so screens can display a specific "session expired" message
+        // rather than a generic failure, and distinguish expiry from wrong credentials
+        error.sessionExpired = serverError.error === 'Session expired';
+
+        if (!isLoggingOut) {
+          isLoggingOut = true;
+          await AsyncStorage.multiRemove(['authToken', 'user', 'isAdmin']);
+          if (logoutCallback) logoutCallback(error.sessionExpired);
+        }
       }
-    }
-    return Promise.reject(error);
-  }
-);
+      return Promise.reject(error);
+    },
+  );
+};
+
+attachResponseInterceptor(api);
+attachResponseInterceptor(adminApi);
 
 // API Service functions
 const ApiService = {
   setLogoutCallback: (callback) => {
     logoutCallback = callback;
+    isLoggingOut = false; // Reset when a new callback is registered (on app startup / after login)
   },
   // ============= Public APIs =============
 
@@ -70,13 +119,13 @@ const ApiService = {
     try {
       const response = await api.get(API_ENDPOINTS.NODES_LIST, { params });
 
-      // Background sync: Update offline cache if enabled (don't await, run in background)
-      OfflineService.isOfflineEnabled().then(async (enabled) => {
-        if (enabled && response.data.success) {
-          console.log('📥 Background sync: Updating cached nodes...');
-          await OfflineService.saveNodes(response.data.nodes);
-        }
-      }).catch(err => console.warn('Background cache update failed:', err));
+      // Always keep cached nodes fresh so offline fallback does not serve stale data.
+      // Normalize image fields so both image360 and image360_url are always present.
+      if (response.data?.success && Array.isArray(response.data.nodes)) {
+        const normalized = response.data.nodes.map(ApiService.normalizeNodeImageFields);
+        OfflineService.saveNodes(normalized)
+          .catch((err) => console.warn('Background cache update failed:', err));
+      }
 
       return { ...response.data, offline: false };
     } catch (error) {
@@ -287,6 +336,7 @@ const ApiService = {
    * Admin login
    */
   adminLogin: async (username, password) => {
+    isLoggingOut = false; // Reset on any new login attempt so the next 401 re-triggers logout
     try {
       const response = await api.post(API_ENDPOINTS.ADMIN_LOGIN, {
         username,
@@ -326,6 +376,64 @@ const ApiService = {
     return isAdmin === 'true';
   },
 
+  normalizeNodeImageFields: (node = {}) => {
+    const imageUrl = node.image360_url || node.image360 || null;
+    return {
+      ...node,
+      image360_url: imageUrl,
+      image360: imageUrl,
+      has_360_image: !!(imageUrl && String(imageUrl).trim() !== ''),
+    };
+  },
+
+  refreshNodesCacheFromServer: async () => {
+    try {
+      const response = await api.get(API_ENDPOINTS.NODES_LIST, { params: { _ts: Date.now() } });
+      if (response.data?.success && Array.isArray(response.data.nodes)) {
+        const normalizedNodes = response.data.nodes.map(ApiService.normalizeNodeImageFields);
+        await OfflineService.saveNodes(normalizedNodes);
+      }
+    } catch (error) {
+      // Do not block mutation success if refresh fails; screens will still reload on focus.
+      console.warn('Failed to refresh node cache from server:', error.message);
+    }
+  },
+
+  // Keep offline cache in sync after admin node mutations so UI immediately reflects image changes.
+  syncUpdatedNodeInCache: async (updatedNode) => {
+    if (!updatedNode || !updatedNode.node_id) return;
+
+    try {
+      const cachedNodes = await OfflineService.getNodes();
+      if (!Array.isArray(cachedNodes) || cachedNodes.length === 0) return;
+      const normalizedNode = ApiService.normalizeNodeImageFields(updatedNode);
+      const updatedNodeId = Number(normalizedNode.node_id);
+
+      const nextNodes = cachedNodes.map((node) => {
+        if (Number(node.node_id) !== updatedNodeId) return node;
+        return ApiService.normalizeNodeImageFields({ ...node, ...normalizedNode });
+      });
+
+      await OfflineService.saveNodes(nextNodes);
+    } catch (cacheError) {
+      console.warn('Failed to sync updated node in offline cache:', cacheError.message);
+    }
+  },
+
+  removeDeletedNodeFromCache: async (nodeId) => {
+    if (!nodeId) return;
+
+    try {
+      const cachedNodes = await OfflineService.getNodes();
+      if (!Array.isArray(cachedNodes) || cachedNodes.length === 0) return;
+
+      const nextNodes = cachedNodes.filter((node) => node.node_id !== nodeId);
+      await OfflineService.saveNodes(nextNodes);
+    } catch (cacheError) {
+      console.warn('Failed to remove deleted node from offline cache:', cacheError.message);
+    }
+  },
+
   // ============= Admin Node CRUD =============
 
   /**
@@ -333,7 +441,10 @@ const ApiService = {
    */
   createNode: async (nodeData) => {
     try {
-      const response = await api.post(API_ENDPOINTS.NODE_CREATE, nodeData);
+      const response = await adminApi.post(API_ENDPOINTS.NODE_CREATE, nodeData);
+      if (response.data?.success) {
+        await ApiService.refreshNodesCacheFromServer();
+      }
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -345,7 +456,22 @@ const ApiService = {
    */
   updateNode: async (nodeId, nodeData) => {
     try {
-      const response = await api.put(`${API_ENDPOINTS.NODE_UPDATE}${nodeId}/update/`, nodeData);
+      const response = await adminApi.put(`${API_ENDPOINTS.NODE_UPDATE}${nodeId}/update/`, nodeData);
+      if (response.data?.success) {
+        if (response.data.node) {
+          await ApiService.syncUpdatedNodeInCache(response.data.node);
+        } else {
+          try {
+            const detail = await ApiService.getNodeDetail(nodeId);
+            if (detail?.success && detail.node) {
+              await ApiService.syncUpdatedNodeInCache(detail.node);
+            }
+          } catch (detailError) {
+            console.warn('Failed to fetch updated node detail for cache sync:', detailError.message);
+          }
+        }
+        await ApiService.refreshNodesCacheFromServer();
+      }
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -357,7 +483,11 @@ const ApiService = {
    */
   deleteNode: async (nodeId) => {
     try {
-      const response = await api.delete(`${API_ENDPOINTS.NODE_DELETE}${nodeId}/delete/`);
+      const response = await adminApi.delete(`${API_ENDPOINTS.NODE_DELETE}${nodeId}/delete/`);
+      if (response.data?.success) {
+        await ApiService.removeDeletedNodeFromCache(nodeId);
+        await ApiService.refreshNodesCacheFromServer();
+      }
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -371,7 +501,7 @@ const ApiService = {
    */
   createEdge: async (edgeData) => {
     try {
-      const response = await api.post(API_ENDPOINTS.EDGE_CREATE, edgeData);
+      const response = await adminApi.post(API_ENDPOINTS.EDGE_CREATE, edgeData);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -383,7 +513,7 @@ const ApiService = {
    */
   updateEdge: async (edgeId, edgeData) => {
     try {
-      const response = await api.put(`${API_ENDPOINTS.EDGE_UPDATE}${edgeId}/update/`, edgeData);
+      const response = await adminApi.put(`${API_ENDPOINTS.EDGE_UPDATE}${edgeId}/update/`, edgeData);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -395,7 +525,7 @@ const ApiService = {
    */
   deleteEdge: async (edgeId) => {
     try {
-      const response = await api.delete(`${API_ENDPOINTS.EDGE_DELETE}${edgeId}/delete/`);
+      const response = await adminApi.delete(`${API_ENDPOINTS.EDGE_DELETE}${edgeId}/delete/`);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -409,7 +539,7 @@ const ApiService = {
    */
   createAnnotation: async (annotationData) => {
     try {
-      const response = await api.post(API_ENDPOINTS.ANNOTATION_CREATE, annotationData);
+      const response = await adminApi.post(API_ENDPOINTS.ANNOTATION_CREATE, annotationData);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -421,7 +551,7 @@ const ApiService = {
    */
   updateAnnotation: async (annotationId, annotationData) => {
     try {
-      const response = await api.put(`${API_ENDPOINTS.ANNOTATION_UPDATE}${annotationId}/update/`, annotationData);
+      const response = await adminApi.put(`${API_ENDPOINTS.ANNOTATION_UPDATE}${annotationId}/update/`, annotationData);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -433,7 +563,7 @@ const ApiService = {
    */
   deleteAnnotation: async (annotationId) => {
     try {
-      const response = await api.delete(`${API_ENDPOINTS.ANNOTATION_DELETE}${annotationId}/delete/`);
+      const response = await adminApi.delete(`${API_ENDPOINTS.ANNOTATION_DELETE}${annotationId}/delete/`);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -549,7 +679,7 @@ const ApiService = {
    */
   createEvent: async (eventData) => {
     try {
-      const response = await api.post(API_ENDPOINTS.EVENT_CREATE, eventData);
+      const response = await adminApi.post(API_ENDPOINTS.EVENT_CREATE, eventData);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -561,7 +691,7 @@ const ApiService = {
    */
   updateEvent: async (eventId, eventData) => {
     try {
-      const response = await api.put(`${API_ENDPOINTS.EVENT_UPDATE}${eventId}/update/`, eventData);
+      const response = await adminApi.put(`${API_ENDPOINTS.EVENT_UPDATE}${eventId}/update/`, eventData);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;
@@ -573,7 +703,7 @@ const ApiService = {
    */
   deleteEvent: async (eventId) => {
     try {
-      const response = await api.delete(`${API_ENDPOINTS.EVENT_DELETE}${eventId}/delete/`);
+      const response = await adminApi.delete(`${API_ENDPOINTS.EVENT_DELETE}${eventId}/delete/`);
       return response.data;
     } catch (error) {
       throw error.response?.data || error;

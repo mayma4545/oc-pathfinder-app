@@ -34,36 +34,30 @@ const AdminDashboardScreen = ({ navigation }) => {
       icon: '🗺️',
       description: 'View full campus map with all nodes',
       screen: 'MapOverview',
-      color: '#9C27B0',
+      color: '#800000',
     },
     {
       title: 'Manage Nodes',
       icon: '📍',
       description: 'Add, edit, or delete location nodes',
       screen: 'NodesList',
-      color: '#4CAF50',
+      color: '#2E7D32',
     },
     {
       title: 'Manage Edges',
       icon: '↔️',
       description: 'Configure connections between nodes',
       screen: 'EdgesList',
-      color: '#2196F3',
+      color: '#5C0000',
     },
     {
       title: 'Manage Events',
       icon: '🎉',
       description: 'Create and manage campus events',
       screen: 'EventsList',
-      color: '#E91E63',
+      color: '#D4A843',
     },
-    {
-      title: 'Manage Annotations',
-      icon: '🏷️',
-      description: 'Add labels to 360° panorama views',
-      screen: 'AnnotationsList',
-      color: '#FF9800',
-    },
+
   ];
 
   return (
