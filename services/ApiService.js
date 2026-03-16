@@ -23,10 +23,10 @@ const getInstallId = async () => {
   return id;
 };
 
-// Public / read-only requests — 5 s timeout is fine (no large payloads)
+// Public / read-only requests — 10 s timeout for mobile clients on slow WiFi
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 5000,
+  timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -99,6 +99,18 @@ const ApiService = {
     isLoggingOut = false; // Reset when a new callback is registered (on app startup / after login)
   },
   // ============= Public APIs =============
+
+  /**
+   * Get data version and stats
+   */
+  getDataVersion: async () => {
+    try {
+      const response = await api.get(API_ENDPOINTS.DATA_VERSION);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  },
 
   /**
    * Get list of all nodes with optional filtering

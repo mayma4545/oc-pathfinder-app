@@ -3,10 +3,10 @@
 
 // IMPORTANT: Replace YOUR_IP with your actual local IP address
 // To find your IP: Run 'ipconfig' on Windows and look for IPv4 Address
-export const API_BASE_URL = 'http://192.168.1.57:3000'; // For physical device (Expo Go)
+export const API_BASE_URL = 'http://192.168.0.104:3000'; // For physical device (Expo Go)
 // export const API_BASE_URL = 'https://schizocarpic-tanya-precorrectly.ngrok-free.dev'; // For Android emulator
 // export const API_BASE_URL = 'https://prorestoration-enrico-worrisome.ngrok-free.dev'; // For Android emulator
-//  export const API_BASE_URL = 'https://express-path-api.onrender.com'; // For production
+// export const API_BASE_URL = 'https://express-path-api.onrender.com'; // For production
 // export const API_BASE_URL = 'http://localhost:8000'; // For iOS simulator
 // export const API_BASE_URL = 'http://localhost:3000'; // For iOS simulator
 // console.log("hi")
@@ -19,6 +19,7 @@ export const API_ENDPOINTS = {
   FIND_PATH: '/api/mobile/find-path/',
   EDGES_LIST: '/api/mobile/edges/',
   ANNOTATIONS_LIST: '/api/mobile/annotations/',
+  DATA_VERSION: '/api/mobile/data-version/',
 
   // Event endpoints
   EVENTS_LIST: '/api/mobile/events/',
