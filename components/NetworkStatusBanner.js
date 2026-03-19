@@ -14,7 +14,14 @@ const NetworkStatusBanner = () => {
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
-      const connected = state.isConnected && state.isInternetReachable !== false;
+      // Local Network Fix: on some local networks, isInternetReachable may be null or false
+      // even if the local server (192.168.1.57) is accessible.
+      // We primarily rely on isConnected (WiFi/Cellular active) and only use
+      // isInternetReachable as a secondary hint.
+      const connected = state.isConnected;
+      
+      console.log(`[NetworkStatus] NetInfo: connected=${state.isConnected}, reachable=${state.isInternetReachable}, type=${state.type}`);
+      
       setIsConnected(connected);
       
       if (!connected) {
@@ -26,6 +33,10 @@ const NetworkStatusBanner = () => {
           friction: 8,
         }).start();
       } else if (showBanner) {
+        // If NetInfo says we are connected, but internet is NOT reachable, 
+        // we keep the banner hidden or show a more specific "Local mode" message.
+        // For this fix, we trust isConnected to avoid the false-offline bug on local IPs.
+        
         // Show "Back online" briefly then hide
         setTimeout(() => {
           Animated.timing(slideAnim, {

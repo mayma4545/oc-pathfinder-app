@@ -38,7 +38,10 @@ class SyncManager {
   async initialize() {
     // Listen for network changes
     this.unsubscribeNetInfo = NetInfo.addEventListener(async (state) => {
-      if (state.isConnected && state.isInternetReachable) {
+      // Local Network Fix: We primarily rely on isConnected (active WiFi/Cellular).
+      // On some local networks, isInternetReachable is false even if the server is accessible.
+      if (state.isConnected) {
+        console.log(`[SyncManager] Network connected (type: ${state.type}), starting sync check...`);
         await this.onNetworkReconnect(state);
       }
     });
