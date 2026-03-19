@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,15 +11,17 @@ import {
   Modal,
   Dimensions,
   Animated,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
+import { Image as ExpoImage } from 'expo-image';
 import { THEME_COLORS, MAP_ASSETS } from '../../config';
 import ApiService from '../../services/ApiService';
 import SvgMap from '../../components/SvgMap';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const NODE_TYPES = [
   { value: 'room', label: '🚪 Room' },
@@ -57,6 +59,14 @@ const NodeFormScreen = ({ route, navigation }) => {
   const [dotSize, setDotSize] = useState(10); // base radius in pixels
   const [mapLoading, setMapLoading] = useState(true);
 
+  // Angle picker modal state
+  const [showAngleModal, setShowAngleModal] = useState(false);
+  // 360 pan/compass refs (same logic as MapDisplayScreen)
+  const pan360X = useRef(new Animated.Value(0)).current;
+  const lastPanX = useRef(0);
+  const compassAngle360 = useRef(new Animated.Value(0)).current;
+  const compassAngleValue360 = useRef(0);
+
   // Generate unique node code based on date and time for new nodes
   const generateNodeCode = () => {
     const now = new Date();
@@ -67,6 +77,88 @@ const NodeFormScreen = ({ route, navigation }) => {
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
     return `NODE-${year}${month}${day}-${hours}${minutes}${seconds}`;
+  };
+
+  // Pan responder for the angle-picker 360 viewer (mirrors MapDisplayScreen logic)
+  const panResponder360 = useMemo(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        pan360X.setOffset(lastPanX.current);
+        pan360X.setValue(0);
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const sensitivity = 4;
+        const dx = gestureState.dx * sensitivity;
+        pan360X.setValue(dx);
+
+        const imageWidth = SCREEN_HEIGHT * 6;
+        const totalOffset = lastPanX.current + dx;
+        let wrappedOffset = totalOffset % imageWidth;
+        const angle = (-wrappedOffset / imageWidth) * 360;
+        let newAngle = angle;
+        while (newAngle < 0) newAngle += 360;
+        while (newAngle >= 360) newAngle -= 360;
+
+        compassAngle360.setValue(newAngle);
+        compassAngleValue360.current = newAngle;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const sensitivity = 4;
+        const imageWidth = SCREEN_HEIGHT * 6;
+        lastPanX.current += gestureState.dx * sensitivity;
+
+        if (lastPanX.current > imageWidth / 2) {
+          lastPanX.current -= imageWidth;
+          pan360X.setOffset(lastPanX.current);
+        } else if (lastPanX.current < -imageWidth / 2) {
+          lastPanX.current += imageWidth;
+          pan360X.setOffset(lastPanX.current);
+        }
+        pan360X.flattenOffset();
+      },
+      onPanResponderTerminate: () => {
+        pan360X.flattenOffset();
+      },
+    }),
+  [pan360X]);
+
+  const getCompassDirection = useCallback((angle) => {
+    if (angle >= 337.5 || angle < 22.5) return 'N';
+    if (angle >= 22.5 && angle < 67.5) return 'NE';
+    if (angle >= 67.5 && angle < 112.5) return 'E';
+    if (angle >= 112.5 && angle < 157.5) return 'SE';
+    if (angle >= 157.5 && angle < 202.5) return 'S';
+    if (angle >= 202.5 && angle < 247.5) return 'SW';
+    if (angle >= 247.5 && angle < 292.5) return 'W';
+    if (angle >= 292.5 && angle < 337.5) return 'NW';
+    return 'N';
+  }, []);
+
+  // Open the angle picker modal and seek to the current annotation value
+  const openAngleModal = () => {
+    const currentAngle = parseFloat(formData.annotation) || 0;
+    const imageWidth = SCREEN_HEIGHT * 6;
+    const initialOffset = -(currentAngle / 360) * imageWidth;
+
+    // Reset any leftover offset from previous drag (mirrors MapDisplayScreen's handleView360)
+    pan360X.setOffset(0);
+    pan360X.flattenOffset();
+
+    compassAngle360.setValue(currentAngle);
+    compassAngleValue360.current = currentAngle;
+    pan360X.setValue(initialOffset);
+    lastPanX.current = initialOffset;
+
+    setShowAngleModal(true);
+  };
+
+  // Confirm: write current compass angle back to formData
+  const confirmAngle = () => {
+    const angle = Math.round(compassAngleValue360.current);
+    handleChange('annotation', angle.toString());
+    setShowAngleModal(false);
   };
 
   useEffect(() => {
@@ -378,14 +470,29 @@ const NodeFormScreen = ({ route, navigation }) => {
 
           <View style={styles.field}>
             <Text style={styles.label}>Initial View Angle (0–360°)</Text>
-            <TextInput
-              style={styles.input}
-              value={formData.annotation}
-              onChangeText={(value) => handleChange('annotation', value)}
-              placeholder="e.g., 90  (facing East)"
-              placeholderTextColor="#999"
-              keyboardType="decimal-pad"
-            />
+            <TouchableOpacity
+              style={[
+                styles.input,
+                styles.anglePickerButton,
+                !(image360 || (isEdit && existingImageUrl)) && styles.anglePickerButtonDisabled,
+              ]}
+              onPress={() => {
+                if (image360 || (isEdit && existingImageUrl)) {
+                  openAngleModal();
+                } else {
+                  Alert.alert('No 360° Image', 'Please upload a 360° image first before setting the view angle.');
+                }
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={[
+                styles.anglePickerButtonText,
+                !(image360 || (isEdit && existingImageUrl)) && styles.anglePickerButtonTextDisabled,
+              ]}>
+                {formData.annotation !== '' ? `${parseFloat(formData.annotation).toFixed(0)}°  (${getCompassDirection(parseFloat(formData.annotation) || 0)})` : 'Tap to set angle in 360° viewer'}
+              </Text>
+              <Text style={styles.anglePickerArrow}>›</Text>
+            </TouchableOpacity>
             <Text style={styles.hint}>The angle in the 360° image where this room entrance faces (0 = North, 90 = East, 180 = South, 270 = West)</Text>
           </View>
         </View>
@@ -580,6 +687,87 @@ const NodeFormScreen = ({ route, navigation }) => {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Angle Picker 360 Modal */}
+      <Modal
+        visible={showAngleModal}
+        animationType="slide"
+        onRequestClose={() => setShowAngleModal(false)}
+        statusBarTranslucent
+      >
+        <View style={styles.angleModal360Fullscreen}>
+          {/* 360 Image viewer */}
+          {(image360 || (isEdit && existingImageUrl)) ? (
+            <View style={{ flex: 1 }} {...panResponder360.panHandlers}>
+              <Animated.View
+                style={[
+                  styles.angleImage360Container,
+                  { transform: [{ translateX: pan360X }] },
+                ]}
+              >
+                {/* Left copy */}
+                <ExpoImage
+                  source={{ uri: image360 ? image360.uri : existingImageUrl }}
+                  style={styles.angleImage360Part}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  priority="high"
+                />
+                {/* Center copy */}
+                <ExpoImage
+                  source={{ uri: image360 ? image360.uri : existingImageUrl }}
+                  style={styles.angleImage360Part}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  priority="high"
+                />
+                {/* Right copy */}
+                <ExpoImage
+                  source={{ uri: image360 ? image360.uri : existingImageUrl }}
+                  style={styles.angleImage360Part}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  priority="high"
+                />
+              </Animated.View>
+            </View>
+          ) : (
+            <View style={styles.angleNoImageContainer}>
+              <Text style={styles.angleNoImageText}>No 360° image available</Text>
+            </View>
+          )}
+
+          {/* Compass Overlay (same as MapDisplayScreen) */}
+          <AngleCompassOverlay
+            compassAngleValue={compassAngleValue360}
+            getCompassDirection={getCompassDirection}
+          />
+
+          {/* Center crosshair */}
+          <View style={styles.angleCrosshair} pointerEvents="none">
+            <View style={styles.angleCrosshairH} />
+            <View style={styles.angleCrosshairV} />
+          </View>
+
+          {/* Header bar */}
+          <View style={styles.angleModalHeader}>
+            <TouchableOpacity onPress={() => setShowAngleModal(false)} style={styles.angleModalHeaderBtn}>
+              <Text style={styles.angleModalCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.angleModalTitle}>Set Initial View Angle</Text>
+            <TouchableOpacity onPress={confirmAngle} style={styles.angleModalHeaderBtn}>
+              <Text style={styles.angleModalConfirm}>Confirm</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Instruction */}
+          <View style={styles.angleModalInstruction}>
+            <Text style={styles.angleModalInstructionText}>
+              Swipe left/right to rotate the 360° view. The compass shows the current angle. Tap Confirm to save.
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -667,6 +855,126 @@ const styles = StyleSheet.create({
   pickerOptionSelected: { backgroundColor: '#F5E6E6', borderWidth: 2, borderColor: THEME_COLORS.primary },
   pickerOptionText: { fontSize: 16, color: '#2C3E50' },
   pickerOptionCheck: { fontSize: 18, color: THEME_COLORS.primary, fontWeight: 'bold' },
+
+  // Angle picker button (replaces TextInput)
+  anglePickerButton: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 14 },
+  anglePickerButtonDisabled: { backgroundColor: '#F5F5F5', borderColor: '#E0E0E0' },
+  anglePickerButtonText: { fontSize: 16, color: '#2C3E50', flex: 1 },
+  anglePickerButtonTextDisabled: { color: '#999' },
+  anglePickerArrow: { fontSize: 22, color: THEME_COLORS.primary, fontWeight: 'bold', marginLeft: 8 },
+
+  // Angle 360 picker modal
+  angleModal360Fullscreen: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  angleImage360Container: { flexDirection: 'row', height: SCREEN_HEIGHT },
+  angleImage360Part: { width: SCREEN_HEIGHT * 6, height: SCREEN_HEIGHT, backgroundColor: 'transparent' },
+  angleNoImageContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  angleNoImageText: { color: '#FFFFFF', fontSize: 18 },
+
+  // Compass overlay (same layout as MapDisplayScreen)
+  angleCompassOverlay: {
+    position: 'absolute',
+    top: 80,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
+  angleCompassCircle: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    marginBottom: 10,
+  },
+  angleCompassDirection: { fontSize: 26, fontWeight: 'bold', color: '#FFFFFF' },
+  angleCompassAngle: { fontSize: 13, color: '#FFFFFF', marginTop: 4 },
+  angleCompassBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: SCREEN_WIDTH * 0.8,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    borderRadius: 20,
+    paddingHorizontal: 5,
+  },
+  angleCompassLabel: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold', paddingHorizontal: 10 },
+
+  // Crosshair
+  angleCrosshair: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  angleCrosshairH: { position: 'absolute', width: 40, height: 2, backgroundColor: 'rgba(255,255,255,0.8)' },
+  angleCrosshairV: { position: 'absolute', width: 2, height: 40, backgroundColor: 'rgba(255,255,255,0.8)' },
+
+  // Header bar at the top of the angle modal
+  angleModalHeader: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    zIndex: 10,
+  },
+  angleModalHeaderBtn: { minWidth: 70, alignItems: 'center' },
+  angleModalTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  angleModalCancel: { color: '#FF6B6B', fontSize: 16, fontWeight: '600' },
+  angleModalConfirm: { color: '#4CAF50', fontSize: 16, fontWeight: '600' },
+
+  // Instruction bar at the bottom
+  angleModalInstruction: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    padding: 14,
+    alignItems: 'center',
+  },
+  angleModalInstructionText: { color: '#CCCCCC', fontSize: 13, textAlign: 'center', lineHeight: 18 },
+});
+
+// Compass overlay component for the angle picker modal
+const AngleCompassOverlay = React.memo(({ compassAngleValue, getCompassDirection }) => {
+  const [displayAngle, setDisplayAngle] = useState(0);
+  const [displayDirection, setDisplayDirection] = useState('N');
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const currentAngle = compassAngleValue.current;
+      setDisplayAngle(Math.round(currentAngle));
+      setDisplayDirection(getCompassDirection(currentAngle));
+    }, 100);
+    return () => clearInterval(interval);
+  }, [compassAngleValue, getCompassDirection]);
+
+  return (
+    <View style={styles.angleCompassOverlay} pointerEvents="none">
+      <View style={styles.angleCompassCircle}>
+        <Text style={styles.angleCompassDirection}>{displayDirection}</Text>
+        <Text style={styles.angleCompassAngle}>{displayAngle}°</Text>
+      </View>
+      <View style={styles.angleCompassBar}>
+        <Text style={styles.angleCompassLabel}>W</Text>
+        <Text style={styles.angleCompassLabel}>N</Text>
+        <Text style={styles.angleCompassLabel}>E</Text>
+        <Text style={styles.angleCompassLabel}>S</Text>
+        <Text style={styles.angleCompassLabel}>W</Text>
+      </View>
+    </View>
+  );
 });
 
 export default NodeFormScreen;

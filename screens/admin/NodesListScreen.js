@@ -9,10 +9,10 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { THEME_COLORS } from '../../config';
 import ApiService from '../../services/ApiService';
 import { useFocusEffect } from '@react-navigation/native';
+import AdminDrawerLayout from '../../components/AdminDrawerLayout';
 
 const SORT_OPTIONS = [
   { label: 'Name', value: 'name' },
@@ -242,108 +242,102 @@ const NodesListScreen = ({ navigation }) => {
     SORT_OPTIONS.find((o) => o.value === sortBy)?.label || 'Name';
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>‹ Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Manage Nodes</Text>
-        <View style={styles.placeholder} />
-      </View>
+    <AdminDrawerLayout title="Manage Nodes" activeScreen="nodes">
+      <View style={styles.container}>
 
-      {/* Search */}
-      <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔍</Text>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search nodes..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
+        {/* Search */}
+        <View style={styles.searchContainer}>
+          <Text style={styles.searchIcon}>🔍</Text>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search nodes..."
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+        </View>
 
-      {/* Sort Bar */}
-      <View style={styles.sortBar}>
-        <Text style={styles.sortLabel}>Sort by:</Text>
-        <View style={styles.sortDropdownWrapper}>
+        {/* Sort Bar */}
+        <View style={styles.sortBar}>
+          <Text style={styles.sortLabel}>Sort by:</Text>
+          <View style={styles.sortDropdownWrapper}>
+            <TouchableOpacity
+              style={styles.sortDropdownButton}
+              onPress={() => setDropdownOpen((prev) => !prev)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.sortDropdownButtonText}>{currentSortLabel}</Text>
+              <Text style={styles.sortDropdownArrow}>
+                {dropdownOpen ? '▲' : '▼'}
+              </Text>
+            </TouchableOpacity>
+            {dropdownOpen && (
+              <View style={styles.dropdownMenu}>
+                {SORT_OPTIONS.map((option) => (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.dropdownItem,
+                      sortBy === option.value && styles.dropdownItemActive,
+                    ]}
+                    onPress={() => handleSortSelect(option.value)}
+                  >
+                    <Text
+                      style={[
+                        styles.dropdownItemText,
+                        sortBy === option.value && styles.dropdownItemTextActive,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                    {sortBy === option.value && (
+                      <Text style={styles.dropdownItemCheck}>✓</Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
           <TouchableOpacity
-            style={styles.sortDropdownButton}
-            onPress={() => setDropdownOpen((prev) => !prev)}
+            style={styles.sortDirButton}
+            onPress={toggleSortDir}
             activeOpacity={0.8}
           >
-            <Text style={styles.sortDropdownButtonText}>{currentSortLabel}</Text>
-            <Text style={styles.sortDropdownArrow}>
-              {dropdownOpen ? '▲' : '▼'}
+            <Text style={styles.sortDirText}>
+              {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
             </Text>
           </TouchableOpacity>
-          {dropdownOpen && (
-            <View style={styles.dropdownMenu}>
-              {SORT_OPTIONS.map((option) => (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[
-                    styles.dropdownItem,
-                    sortBy === option.value && styles.dropdownItemActive,
-                  ]}
-                  onPress={() => handleSortSelect(option.value)}
-                >
-                  <Text
-                    style={[
-                      styles.dropdownItemText,
-                      sortBy === option.value && styles.dropdownItemTextActive,
-                    ]}
-                  >
-                    {option.label}
-                  </Text>
-                  {sortBy === option.value && (
-                    <Text style={styles.dropdownItemCheck}>✓</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
         </View>
 
+        {/* Add Button */}
         <TouchableOpacity
-          style={styles.sortDirButton}
-          onPress={toggleSortDir}
-          activeOpacity={0.8}
+          style={styles.addButton}
+          onPress={() => navigation.navigate('NodeForm', { node: null })}
         >
-          <Text style={styles.sortDirText}>
-            {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
-          </Text>
+          <Text style={styles.addButtonText}>+ Add New Node</Text>
         </TouchableOpacity>
+
+        {/* Nodes List */}
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={THEME_COLORS.primary} />
+          </View>
+        ) : (
+          <FlatList
+            data={pagedNodes}
+            renderItem={renderNodeItem}
+            keyExtractor={(item) => item.node_id.toString()}
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No nodes found</Text>
+              </View>
+            }
+            ListFooterComponent={renderPagination}
+          />
+        )}
       </View>
-
-      {/* Add Button */}
-      <TouchableOpacity
-        style={styles.addButton}
-        onPress={() => navigation.navigate('NodeForm', { node: null })}
-      >
-        <Text style={styles.addButtonText}>+ Add New Node</Text>
-      </TouchableOpacity>
-
-      {/* Nodes List */}
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={THEME_COLORS.primary} />
-        </View>
-      ) : (
-        <FlatList
-          data={pagedNodes}
-          renderItem={renderNodeItem}
-          keyExtractor={(item) => item.node_id.toString()}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No nodes found</Text>
-            </View>
-          }
-          ListFooterComponent={renderPagination}
-        />
-      )}
-    </SafeAreaView>
+    </AdminDrawerLayout>
   );
 };
 
@@ -351,26 +345,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: THEME_COLORS.background,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 15,
-    backgroundColor: THEME_COLORS.primary,
-  },
-  backButton: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  placeholder: {
-    width: 50,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -397,7 +371,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 15,
     marginBottom: 10,
-    zIndex: 100,
+    zIndex: 1,
   },
   sortLabel: {
     fontSize: 13,

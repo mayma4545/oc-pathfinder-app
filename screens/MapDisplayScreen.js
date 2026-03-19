@@ -668,22 +668,27 @@ const MapDisplayScreen = ({ route, navigation }) => {
     setCurrent360Node(targetNode);
     setCurrent360Index(targetIndex);
     
-    // Initialize view to the node's annotation angle (where the room faces in the 360° image)
-    // Fall back to the next-node compass direction if annotation is not set
+    // Initialize view to the designated angle
+    // For the very first image in a sequence, we should aggressively face the GO marker (the next node)
     let initialAngle = 0;
     
-    if (targetNode.annotation !== null && targetNode.annotation !== undefined) {
-      initialAngle = targetNode.annotation;
-      console.log('🧭 Initial view angle from annotation:', initialAngle, '° -', targetNode.name);
-    } else {
-      const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
-      if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
-        const nextNode = pathData.path[fullPathIndex + 1];
-        if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
-          initialAngle = nextNode.compass_angle;
-          console.log('🧭 Initial view angle from compass_angle:', initialAngle, '° - Next node:', nextNode.name);
-        }
+    // Check if there is a 'next' node to face toward
+    const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
+    let hasSetFromNext = false;
+    
+    if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
+      const nextNode = pathData.path[fullPathIndex + 1];
+      if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
+        initialAngle = Number(nextNode.compass_angle);
+        hasSetFromNext = true;
+        console.log('🧭 Initial view angle from next node compass_angle:', initialAngle, '° - Next node:', nextNode.name);
       }
+    }
+    
+    // If we are at the end of the route or no next node angle exists, fall back to annotation
+    if (!hasSetFromNext && targetNode.annotation !== null && targetNode.annotation !== undefined) {
+      initialAngle = Number(targetNode.annotation);
+      console.log('🧭 Initial view angle from annotation:', initialAngle, '° -', targetNode.name);
     }
     
     // Calculate pan offset for the initial angle
@@ -724,12 +729,12 @@ const MapDisplayScreen = ({ route, navigation }) => {
         Animated.timing(transitionScale, {
           toValue: exitScale,
           duration: 400,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
         Animated.timing(transitionOpacity, {
           toValue: 0,
           duration: 350,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ]).start(() => resolve());
     });
@@ -741,17 +746,21 @@ const MapDisplayScreen = ({ route, navigation }) => {
       nextImageUrlRef.current = nextUrl;
 
       // Determine initial view angle for the new node
+      // Prioritize the GO marker (the next node)
       let initialAngle = 0;
-      if (targetNode.annotation !== null && targetNode.annotation !== undefined) {
-        initialAngle = targetNode.annotation;
-      } else {
-        const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
-        if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
-          const nextNode = pathData.path[fullPathIndex + 1];
-          if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
-            initialAngle = nextNode.compass_angle;
-          }
+      let hasSetFromNext = false;
+      
+      const fullPathIndex = pathData.path.findIndex(n => n.node_id === targetNode.node_id);
+      if (fullPathIndex >= 0 && fullPathIndex < pathData.path.length - 1) {
+        const nextNode = pathData.path[fullPathIndex + 1];
+        if (nextNode.compass_angle !== null && nextNode.compass_angle !== undefined) {
+          initialAngle = Number(nextNode.compass_angle);
+          hasSetFromNext = true;
         }
+      }
+      
+      if (!hasSetFromNext && targetNode.annotation !== null && targetNode.annotation !== undefined) {
+        initialAngle = Number(targetNode.annotation);
       }
 
       const imageWidth = SCREEN_HEIGHT * 6;
@@ -782,12 +791,12 @@ const MapDisplayScreen = ({ route, navigation }) => {
           Animated.timing(transitionScale, {
             toValue: 1,
             duration: 350,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
           Animated.timing(transitionOpacity, {
             toValue: 1,
             duration: 350,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
         ]).start(() => {
           setIsTransitioning(false);
@@ -840,7 +849,8 @@ const MapDisplayScreen = ({ route, navigation }) => {
       const prevNodeData = pathData.path[currentIndex - 1];
       if (prevNode.compass_angle !== null && prevNode.compass_angle !== undefined) {
         // Reverse direction (add 180 degrees)
-        const reverseAngle = (prevNode.compass_angle + 180) % 360;
+        const parsedAngle = Number(prevNode.compass_angle) || 0;
+        const reverseAngle = (parsedAngle + 180) % 360;
         // Find index in nodes with images
         const targetImageIndex = nodesWithImages.findIndex(n => n.node_id === prevNodeData.node_id);
         markers.push({
@@ -1189,7 +1199,8 @@ const MapDisplayScreen = ({ route, navigation }) => {
           {current360Node && (
             <>
               {/* 360° Image with Pan Gestures - OPTIMIZED STRUCTURE */}
-              <View style={{ flex: 1 }} {...panResponder360.panHandlers}>
+              {/* Added center/alignment wrappers for scale to zoom from the exact center of screen */}
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }} {...panResponder360.panHandlers}>
                 {/* Optimized: Flattened structure with combined transforms */}
                 <Animated.View
                   style={[
@@ -1233,7 +1244,11 @@ const MapDisplayScreen = ({ route, navigation }) => {
                 style={[
                   styles.markersOverlay,
                   {
-                    transform: [{ translateX: pan360X }]
+                    transform: [
+                      { translateX: pan360X },
+                      { scale: Animated.multiply(scale360, transitionScale) },
+                      { translateY: transitionTranslate }
+                    ]
                   }
                 ]} 
                 pointerEvents="box-none"
@@ -1243,12 +1258,16 @@ const MapDisplayScreen = ({ route, navigation }) => {
                   // The 360° image width = SCREEN_HEIGHT * 6 represents full 360°
                   const imageWidth = SCREEN_HEIGHT * 6;
                   
+                  // Wrap angle to [0, 360) so it correctly overlaps the central image copy
+                  const rawAngle = Number(marker.angle) || 0;
+                  const normalizedAngle = ((rawAngle % 360) + 360) % 360;
+                  
                   // Calculate marker position based on angle
                   // When viewing angle 0°, we want the marker at 0° to appear at the CENTER of the screen
                   // The image left edge (position 0) corresponds to 0°
                   // When pan360X = 0 (viewing 0°), screen center is at SCREEN_WIDTH/2
                   // So marker at angle A should be at position: (A / 360) * imageWidth + SCREEN_WIDTH/2
-                  const markerAnglePosition = (marker.angle / 360) * imageWidth;
+                  const markerAnglePosition = (normalizedAngle / 360) * imageWidth;
                   const markerPositionInImage = markerAnglePosition + SCREEN_WIDTH / 2;
                   
                   // Debug log for first marker
@@ -1449,16 +1468,32 @@ const MapDisplayScreen = ({ route, navigation }) => {
                     <View style={styles.directionsIn360}>
                       {(() => {
                         const currentIndex = pathData.path.findIndex(n => n.node_id === current360Node.node_id);
-                        // Show the next direction (how to get to the next node from current position)
-                        if (currentIndex >= 0 && currentIndex + 1 < pathData.directions.length) {
-                          return (
-                            <View style={styles.direction360Item}>
-                              <Text style={styles.direction360Number}>{currentIndex + 2}.</Text>
-                              <Text style={styles.direction360Text}>{pathData.directions[currentIndex + 1]}</Text>
+                        if (currentIndex < 0) return null;
+                        
+                        const directionItems = [];
+                        
+                        // At the start node, show the "Face towards" instruction
+                        if (currentIndex === 0 && pathData.directions.length > 0) {
+                          directionItems.push(
+                            <View key="face" style={styles.direction360Item}>
+                              <Text style={styles.direction360Number}>1.</Text>
+                              <Text style={styles.direction360Text}>{pathData.directions[0]}</Text>
                             </View>
                           );
                         }
-                        return null;
+                        
+                        // Show the next move direction (how to get to the next node)
+                        const dirIndex = currentIndex + 1;
+                        if (dirIndex < pathData.directions.length) {
+                          directionItems.push(
+                            <View key="move" style={styles.direction360Item}>
+                              <Text style={styles.direction360Number}>{currentIndex === 0 ? '2.' : `${dirIndex + 1}.`}</Text>
+                              <Text style={styles.direction360Text}>{pathData.directions[dirIndex]}</Text>
+                            </View>
+                          );
+                        }
+                        
+                        return directionItems.length > 0 ? directionItems : null;
                       })()}
                     </View>
                   )}

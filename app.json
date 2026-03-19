@@ -33,6 +33,9 @@
         "projectId": "e7d93bed-d9ce-4992-a88d-dea8b432c799"
       }
     },
-    "owner": "mayma4545"
+    "owner": "mayma4545",
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

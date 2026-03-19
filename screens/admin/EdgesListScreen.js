@@ -9,10 +9,10 @@ import {
   ActivityIndicator,
   TextInput,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { THEME_COLORS } from '../../config';
 import ApiService from '../../services/ApiService';
 import { useFocusEffect } from '@react-navigation/native';
+import AdminDrawerLayout from '../../components/AdminDrawerLayout';
 
 const SORT_OPTIONS = [
   { label: 'Name (From Node)', value: 'name' },
@@ -250,110 +250,111 @@ const EdgesListScreen = ({ navigation }) => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>‹ Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Manage Edges</Text>
+    <AdminDrawerLayout
+      title="Manage Edges"
+      activeScreen="edges"
+      rightElement={
         <TouchableOpacity
-          style={styles.addButton}
+          style={styles.headerAddButton}
           onPress={() => navigation.navigate('EdgeForm')}
         >
-          <Text style={styles.addButtonText}>+ Add</Text>
+          <Text style={styles.headerAddButtonText}>+ Add</Text>
         </TouchableOpacity>
-      </View>
+      }
+    >
+      <View style={styles.container}>
 
-      {/* Search */}
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search edges..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          clearButtonMode="while-editing"
-        />
-      </View>
+        {/* Search */}
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search edges..."
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            clearButtonMode="while-editing"
+          />
+        </View>
 
-      {/* Sort Bar */}
-      <View style={styles.sortBar}>
-        <Text style={styles.sortLabel}>Sort by:</Text>
-        <View style={styles.sortDropdownWrapper}>
+        {/* Sort Bar */}
+        <View style={styles.sortBar}>
+          <Text style={styles.sortLabel}>Sort by:</Text>
+          <View style={styles.sortDropdownWrapper}>
+            <TouchableOpacity
+              style={styles.sortDropdownButton}
+              onPress={() => setDropdownOpen((prev) => !prev)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.sortDropdownButtonText}>{currentSortLabel}</Text>
+              <Text style={styles.sortDropdownArrow}>
+                {dropdownOpen ? '▲' : '▼'}
+              </Text>
+            </TouchableOpacity>
+            {dropdownOpen && (
+              <View style={styles.dropdownMenu}>
+                {SORT_OPTIONS.map((option) => (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.dropdownItem,
+                      sortBy === option.value && styles.dropdownItemActive,
+                    ]}
+                    onPress={() => handleSortSelect(option.value)}
+                  >
+                    <Text
+                      style={[
+                        styles.dropdownItemText,
+                        sortBy === option.value && styles.dropdownItemTextActive,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                    {sortBy === option.value && (
+                      <Text style={styles.dropdownItemCheck}>✓</Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
           <TouchableOpacity
-            style={styles.sortDropdownButton}
-            onPress={() => setDropdownOpen((prev) => !prev)}
+            style={styles.sortDirButton}
+            onPress={toggleSortDir}
             activeOpacity={0.8}
           >
-            <Text style={styles.sortDropdownButtonText}>{currentSortLabel}</Text>
-            <Text style={styles.sortDropdownArrow}>
-              {dropdownOpen ? '▲' : '▼'}
+            <Text style={styles.sortDirText}>
+              {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
             </Text>
           </TouchableOpacity>
-          {dropdownOpen && (
-            <View style={styles.dropdownMenu}>
-              {SORT_OPTIONS.map((option) => (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[
-                    styles.dropdownItem,
-                    sortBy === option.value && styles.dropdownItemActive,
-                  ]}
-                  onPress={() => handleSortSelect(option.value)}
-                >
-                  <Text
-                    style={[
-                      styles.dropdownItemText,
-                      sortBy === option.value && styles.dropdownItemTextActive,
-                    ]}
-                  >
-                    {option.label}
-                  </Text>
-                  {sortBy === option.value && (
-                    <Text style={styles.dropdownItemCheck}>✓</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
         </View>
 
-        <TouchableOpacity
-          style={styles.sortDirButton}
-          onPress={toggleSortDir}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.sortDirText}>
-            {sortDir === 'asc' ? '↑ Asc' : '↓ Desc'}
+        <View style={styles.infoBox}>
+          <Text style={styles.infoText}>
+            💡 Edges connect nodes and define possible paths. Tap + Add to create
+            a new connection between nodes.
           </Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.infoBox}>
-        <Text style={styles.infoText}>
-          💡 Edges connect nodes and define possible paths. Tap + Add to create
-          a new connection between nodes.
-        </Text>
-      </View>
-
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={THEME_COLORS.primary} />
         </View>
-      ) : (
-        <FlatList
-          data={pagedEdges}
-          renderItem={renderEdgeItem}
-          keyExtractor={(item) => item.edge_id.toString()}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No edges found</Text>
-            </View>
-          }
-          ListFooterComponent={renderPagination}
-        />
-      )}
-    </SafeAreaView>
+
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={THEME_COLORS.primary} />
+          </View>
+        ) : (
+          <FlatList
+            data={pagedEdges}
+            renderItem={renderEdgeItem}
+            keyExtractor={(item) => item.edge_id.toString()}
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No edges found</Text>
+              </View>
+            }
+            ListFooterComponent={renderPagination}
+          />
+        )}
+      </View>
+    </AdminDrawerLayout>
   );
 };
 
@@ -362,30 +363,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: THEME_COLORS.background,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 15,
-    backgroundColor: THEME_COLORS.primary,
-  },
-  backButton: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  addButton: {
+  headerAddButton: {
     backgroundColor: '#4CAF50',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 15,
   },
-  addButtonText: {
+  headerAddButtonText: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
@@ -410,7 +394,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 10,
     marginBottom: 8,
-    zIndex: 100,
+    zIndex: 1,
   },
   sortLabel: {
     fontSize: 13,

@@ -21,6 +21,7 @@ import { transformCoordinate } from '../../utils/MapCoordinateUtils';
 import CalibrationOverlay from '../../components/CalibrationOverlay';
 import { useFocusEffect } from '@react-navigation/native';
 import { Image as ExpoImage } from 'expo-image';
+import AdminDrawerLayout from '../../components/AdminDrawerLayout';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -520,35 +521,33 @@ const MapOverviewScreen = ({ navigation }) => {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <AdminDrawerLayout title="Map Overview" activeScreen="map">
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={THEME_COLORS.primary} />
           <Text style={styles.loadingText}>Loading map data...</Text>
         </View>
-      </SafeAreaView>
+      </AdminDrawerLayout>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>‹ Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>🗺️ Map Overview</Text>
-        <TouchableOpacity onPress={loadData}>
-          <Text style={styles.refreshButton}>↻</Text>
-        </TouchableOpacity>
-        {__DEV__ && (
-          <TouchableOpacity 
-            onPress={() => setShowCalibration(!showCalibration)}
-            style={{ marginLeft: 15 }}
-          >
-            <Text style={{ fontSize: 24 }}>{showCalibration ? '🛠️' : '🔧'}</Text>
+    <AdminDrawerLayout
+      title="Map Overview"
+      activeScreen="map"
+      rightElement={
+        <>
+          <TouchableOpacity onPress={loadData}>
+            <Text style={styles.refreshButton}>↻</Text>
           </TouchableOpacity>
-        )}
-      </View>
+          {__DEV__ && (
+            <TouchableOpacity onPress={() => setShowCalibration(!showCalibration)}>
+              <Text style={{ fontSize: 22 }}>{showCalibration ? '🛠️' : '🔧'}</Text>
+            </TouchableOpacity>
+          )}
+        </>
+      }
+    >
+      <View style={styles.container}>
 
       {/* Stats Bar */}
       <View style={styles.statsBar}>
@@ -677,7 +676,8 @@ const MapOverviewScreen = ({ navigation }) => {
           onClose={() => setShowCalibration(false)}
         />
       )}
-    </SafeAreaView>
+      </View>
+    </AdminDrawerLayout>
   );
 };
 
@@ -685,23 +685,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#1F0F0F',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#2D1114',
-  },
-  backButton: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
   },
   refreshButton: {
     color: '#D4A843',

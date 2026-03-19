@@ -9,10 +9,10 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { THEME_COLORS } from '../../config';
 import ApiService from '../../services/ApiService';
 import { useFocusEffect } from '@react-navigation/native';
+import AdminDrawerLayout from '../../components/AdminDrawerLayout';
 
 const EventsListScreen = ({ navigation }) => {
   const [events, setEvents] = useState([]);
@@ -160,15 +160,8 @@ const EventsListScreen = ({ navigation }) => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>‹ Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Manage Events</Text>
-        <View style={styles.placeholder} />
-      </View>
+    <AdminDrawerLayout title="Manage Events" activeScreen="events">
+      <View style={styles.container}>
 
       {/* Search */}
       <View style={styles.searchContainer}>
@@ -211,7 +204,8 @@ const EventsListScreen = ({ navigation }) => {
           }
         />
       )}
-    </SafeAreaView>
+      </View>
+    </AdminDrawerLayout>
   );
 };
 
@@ -219,28 +213,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: THEME_COLORS.background,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: THEME_COLORS.primary,
-  },
-  backButton: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    width: 60,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    flex: 1,
-    textAlign: 'center',
-  },
-  placeholder: {
-    width: 60,
   },
   searchContainer: {
     flexDirection: 'row',

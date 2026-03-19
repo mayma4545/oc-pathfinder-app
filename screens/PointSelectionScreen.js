@@ -107,10 +107,10 @@ const PointSelectionScreen = ({ navigation }) => {
         const imageWidth = SCREEN_HEIGHT * 6;
         lastPanX360.current += gestureState.dx * sensitivity;
         // Wrap to middle copy for seamless looping — same logic as MapDisplayScreen
-        if (lastPanX360.current > -imageWidth / 2) {
+        if (lastPanX360.current > imageWidth / 2) {
           lastPanX360.current -= imageWidth;
           pan360X.setOffset(lastPanX360.current);
-        } else if (lastPanX360.current < -imageWidth * 1.5) {
+        } else if (lastPanX360.current < -imageWidth / 2) {
           lastPanX360.current += imageWidth;
           pan360X.setOffset(lastPanX360.current);
         }
@@ -142,10 +142,12 @@ const PointSelectionScreen = ({ navigation }) => {
   // Open the 360° preview for a node — uses cached image if available
   const openPreview360 = useCallback(async (node) => {
     setPreview360Node(node);
-    // Start centered on the middle copy (offset = -imageWidth)
+    // Start facing the node's annotation angle; fall back to 0° if unset
     const imageWidth = SCREEN_HEIGHT * 6;
-    lastPanX360.current = -imageWidth;
-    pan360X.setValue(-imageWidth);
+    const initialAngle = (node.annotation !== null && node.annotation !== undefined) ? node.annotation : 0;
+    const initialOffset = -(initialAngle / 360) * imageWidth;
+    lastPanX360.current = initialOffset;
+    pan360X.setValue(initialOffset);
     scale360.setValue(1);
     setBaseScale360(1);
     setPreview360ImageUrl(null);
