@@ -42,9 +42,10 @@ const adminApi = axios.create({
 });
 
 // Attach auth token + unique install ID to every request for both instances
-const attachRequestInterceptor = (instance) => {
+const attachRequestInterceptor = (instance, name) => {
   instance.interceptors.request.use(
     async (config) => {
+      console.log(`[ApiService] Request: ${name} ${config.method.toUpperCase()} ${config.url}`);
       const [token, installId] = await Promise.all([
         AsyncStorage.getItem('authToken'),
         getInstallId(),
@@ -54,12 +55,15 @@ const attachRequestInterceptor = (instance) => {
       config.headers['X-App-Install-ID'] = installId;
       return config;
     },
-    (error) => Promise.reject(error),
+    (error) => {
+      console.error(`[ApiService] Request Error: ${name}`, error);
+      return Promise.reject(error);
+    },
   );
 };
 
-attachRequestInterceptor(api);
-attachRequestInterceptor(adminApi);
+attachRequestInterceptor(api, 'Public');
+attachRequestInterceptor(adminApi, 'Admin');
 
 // Response interceptor for error handling
 let logoutCallback = null;
@@ -68,10 +72,19 @@ let logoutCallback = null;
 let isLoggingOut = false;
 
 // Attach response interceptor to both api and adminApi
-const attachResponseInterceptor = (instance) => {
+const attachResponseInterceptor = (instance, name) => {
   instance.interceptors.response.use(
-    (response) => response,
+    (response) => {
+      console.log(`[ApiService] Response: ${name} ${response.config.method.toUpperCase()} ${response.config.url} Status: ${response.status}`);
+      return response;
+    },
     async (error) => {
+      console.error(`[ApiService] Response Error: ${name} ${error.config?.method?.toUpperCase()} ${error.config?.url}`, {
+        status: error.response?.status,
+        message: error.message,
+        code: error.code,
+      });
+
       if (error.response?.status === 401) {
         const serverError = error.response.data || {};
         // Tag the error so screens can display a specific "session expired" message
@@ -89,8 +102,8 @@ const attachResponseInterceptor = (instance) => {
   );
 };
 
-attachResponseInterceptor(api);
-attachResponseInterceptor(adminApi);
+attachResponseInterceptor(api, 'Public');
+attachResponseInterceptor(adminApi, 'Admin');
 
 // API Service functions
 const ApiService = {
@@ -99,6 +112,34 @@ const ApiService = {
     isLoggingOut = false; // Reset when a new callback is registered (on app startup / after login)
   },
   // ============= Public APIs =============
+
+  /**
+   * Lightweight connectivity check.
+   * Hits GET /api/mobile/ping/ which returns { isOnline: true } immediately
+   * without any database queries, making it much faster than getNodes().
+   *
+   * Uses a 60 s timeout (overriding the shared 10 s default) so that the app
+   * can survive Render's free-tier cold-start delay (~30-50 s) without
+   * incorrectly falling into offline mode.
+   *
+   * Always resolves — never rejects — so WelcomeScreen can distinguish between
+   * "server said something unexpected" (isOnline: false) vs "network totally
+   * unreachable" (throws, caught by WelcomeScreen's own catch block).
+   */
+  ping: async () => {
+    try {
+      const response = await api.get(API_ENDPOINTS.PING, { timeout: 60000 });
+      // Validate the shape before trusting it
+      if (response.data && response.data.isOnline === true) {
+        return { isOnline: true };
+      }
+      return { isOnline: false };
+    } catch (error) {
+      // Re-throw so WelcomeScreen's catch block handles it and falls back to
+      // offline mode.  We do NOT silently swallow it here.
+      throw error;
+    }
+  },
 
   /**
    * Get data version and stats
